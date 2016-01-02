@@ -25,3 +25,37 @@ Because there is no translation to SQL or any other intermediate layer, a query 
 
 ## Disadvantages
 * The RPC nature of SQL queries are not possible without additional functionality and currently there are no plans to allow it.
+
+## Example
+```d
+ushort pageSize = 256;
+
+static struct A
+{
+	int a;
+	int b;
+}
+ubyte[] storageFileBytes;
+storageFileBytes.length = 2 * pageSize;
+
+DbFile dbFile = DbFile(storageFileBytes, pageSize);
+DbStorage dbStorage = DbStorage(dbFile, pageSize);
+DataBase db = DataBase(&dbStorage);
+db.createStorage();
+
+auto numDbColl = db.createCollection!A("B.numbers");
+
+int[] numbers = [40,41,42,43];
+int c =1;
+numbers
+	.map!(a => A(a,c++))
+		.copy(numDbColl);
+
+auto data = db.collection!A("B.numbers");
+
+writeln(data);
+db.mStorage.mDbFile.loadPage(PageNo.Master).dump(16);
+db.mStorage.mDbFile.loadPage(2).dump(16);
+
+assert(data.array == [A(40,1),A(41,2), A(42,3), A(43,4)]);
+```
