@@ -24,6 +24,7 @@ Because there is no translation to SQL or any other intermediate layer, a query 
 * minimal storage size in one file
 
 ## Disadvantages
+* Challenging usage of indexes
 * The RPC nature of SQL queries are not possible without additional functionality and currently there are no plans to allow it.
 
 ## Example
@@ -54,8 +55,67 @@ numbers
 auto data = db.collection!A("B.numbers");
 
 writeln(data);
-db.mStorage.mDbFile.loadPage(PageNo.Master).dump(16);
-db.mStorage.mDbFile.loadPage(2).dump(16);
 
 assert(data.array == [A(40,1),A(41,2), A(42,3), A(43,4)]);
 ```
+
+
+##Initial decisions and their justification. 
+Everything is subject to change.
+
+
+###API
+* Database
+    * db management (create, open, close, delete, etc,)
+* Collection
+    * range API (empty, pop, front, etc.)
+    * custom API 
+* Item
+    * itemId
+
+###File format 
+* one file
+* divided into pages
+* little endian data format
+* variable length object storage (cells)
+
+###Page Format
+* page contains header and payload
+* payload area contains fixed number of same size slots
+* slot can be either data or a pointer 
+    * if type size is greater than pointer size - pointer is used
+    * else raw data is put into the slot
+
+###Pointer Format
+* flag
+* offset
+* pageId
+
+Or (depending on flags)
+
+* flag
+* data
+
+###Cell Format
+* variable-length integer
+
+###Cell Lookup
+* by offset computed from itemId
+* if available guided by indexes (challenging)
+
+####Types
+* Allowed types
+    * classes
+    * structs
+    * enumns
+    * scalar type
+    * array
+* direct or via proxy object retrieval patterns
+* accessing members by value or reference
+    * member object embedded in the same table or separate
+* implicit conversion to string or string[string]
+    * usable for unknown types
+* name checking of object members
+    * fields
+    * types
+    * number of members
