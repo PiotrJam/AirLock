@@ -1,5 +1,5 @@
 ﻿/*
-Copyright: Copyright Piotr Półtorak 2015-2016.
+Copyright: Copyright Piotr Półtorak 2015-.
 License: $(WEB boost.org/LICENSE_1_0.txt, Boost License 1.0).
 Authors: Piotr Półtorak
 */
@@ -10,17 +10,23 @@ import draft.database.storage;
 
 struct Collection(T)
 {
-	ulong mTableRootPage;
-	long mCurrentId;
+	uint mTableRootPage = PageNo.Null;
 	DbStorage * mDbStorage;
+	long mCurrentId = 0;
 
-	this(DbStorage *dbStorage, ulong tableRootPage)
+
+	this(DbStorage *dbStorage, uint tableRootPage)
 	{
 		mDbStorage = dbStorage;
 		mTableRootPage = tableRootPage;
 		if (mTableRootPage != PageNo.Null)
 		{
 			mCurrentId = dbStorage.getNextDbItemId(mTableRootPage,mCurrentId);
+		}
+		else
+		{
+			// no table, so a new empty one has to be created
+			mTableRootPage = mDbStorage.createTable(mTableRootPage);
 		}
 	}
 	bool empty()
@@ -57,17 +63,12 @@ struct Collection(T)
 		}
 	}
 
-	ulong create()
-	{
-		mTableRootPage = mDbStorage.createTable(mTableRootPage);
-
-		return mTableRootPage;
-	}
 
 	void remove(T item)
 	{
 		mDbStorage.dropTable(mTableRootPage);
 	}
+
 
 	void setKey(alias key)()
 	{

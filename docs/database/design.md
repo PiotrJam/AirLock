@@ -29,34 +29,66 @@ Because there is no translation to SQL or any other intermediate layer, a query 
 
 ## Example
 ```d
-ushort pageSize = 256;
+	static struct A
+	{
+		int a;
+		short b;
+	}
 
-static struct A
-{
-	int a;
-	int b;
-}
-ubyte[] storageFileBytes;
-storageFileBytes.length = 2 * pageSize;
+	static struct B
+	{
+		uint a;
+		long b;
+		float c;
+	}
 
-DbFile dbFile = DbFile(storageFileBytes, pageSize);
-DbStorage dbStorage = DbStorage(dbFile, pageSize);
-DataBase db = DataBase(&dbStorage);
-db.createStorage();
+	static struct C
+	{
+		int a;
+		string name;
+	}
 
-auto numDbColl = db.createCollection!A("B.numbers");
 
-int[] numbers = [40,41,42,43];
-int c =1;
-numbers
-	.map!(a => A(a,c++))
-		.copy(numDbColl);
+	static struct D
+	{
+		string city;
+		string country;
+	}
 
-auto data = db.collection!A("B.numbers");
+	DataBase db = DataBase(null,128);
+	auto collA = db.createCollection!A("SmallIntegers");
+	auto collB = db.createCollection!B("Numbers");
+	auto collC = db.createCollection!C("Mixed");
+	auto collD = db.createCollection!D("Strings");
 
-writeln(data);
+	int[] smallIntegers = [40,41,42,43];
+	short c =1;
+	smallIntegers
+		.map!(a => A(a,c++))
+			.copy(collA);
 
-assert(data.array == [A(40,1),A(41,2), A(42,3), A(43,4)]);
+	auto numbers = [B(1,-1,0.2), B(100_000_000,-1_000_000_000_000,8.71234), B(9_876,5_123_456_789_012,-0.2)];
+	numbers.copy(collB);
+
+	auto mixed = [C(1,"test"), C(2,"Hello World!"), C(-1,"Boom"), C(0,"P")];
+	mixed.copy(collC);
+
+	auto strings = [D("Poznan","Poland"), D("Budapest","Hungary"), D("Warsaw","Poland"), D("Phobos","Mars")];
+	strings.copy(collD);
+
+	auto data = db.collection!A("SmallIntegers");
+	assert(data.array == [A(40,1),A(41,2), A(42,3), A(43,4)]);
+
+	auto data2 = db.collection!B("Numbers");
+	assert(data2.array == numbers);
+
+	auto data3 = db.collection!C("Mixed");
+	assert(data3.array == mixed);
+
+	auto data4 = db.collection!D("Strings").filter!(s => (s.country == "Poland" || s.city.canFind("dap")));
+
+	assert(data4.array == [D("Poznan","Poland"), D("Budapest","Hungary"), D("Warsaw","Poland")]);
+
 ```
 
 
