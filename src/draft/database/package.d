@@ -8,6 +8,6 @@ module draft.database;
 
 public import draft.database.storage;
 public import draft.database.database;
-public import draft.database.table;
+public import draft.database.collection;
 
 
