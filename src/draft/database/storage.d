@@ -72,7 +72,7 @@ struct DbPage
 
 	void writeSlot(uint index, DbPointer pointer)
 	{
-		uint offset = index * DbPointer.sizeof;
+		uint offset = index * cast(uint)DbPointer.sizeof;
 		ulong rawPointer = pointer.rawData;
 		mRawBytes[offset..offset + DbPointer.sizeof] = (cast(void*)&rawPointer)[0..DbPointer.sizeof];
 
@@ -385,7 +385,7 @@ struct DbFile
 	{
 
 		mBuffer.length += mPageSize*count;
-		uint result = mBuffer.length / mPageSize;
+		uint result = cast(uint)mBuffer.length / mPageSize;
 		return result;
 	}
 
@@ -537,7 +537,7 @@ struct DbDataAllocator
 	{
 		assert (freeDataPtr.pageNo != PageNo.Null);
 		DbPointer pointerNewFree = freeDataPtr;
-		uint newOffset = freeDataPtr.offset + data.length;
+		uint newOffset = freeDataPtr.offset + cast(uint)data.length;
 
 		assert(newOffset < mDbFile.mPageSize);
 		pointerNewFree.offset = newOffset;
@@ -606,7 +606,7 @@ struct DbNavigator
 			// Allocate a new page for DbPointer
 			DbPage newPage;
 			newPage.mPageNo = mDbFile.reserveFreePage();
-			uint offset = newPage.mTableHeaderOffset+DbTableHeader.sizeof;
+			uint offset = newPage.mTableHeaderOffset+cast(uint)DbTableHeader.sizeof;
 			newPage.writeLookupPointer(offset,newPage.mPageNo);
 		}
 		
