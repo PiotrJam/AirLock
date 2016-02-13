@@ -1,14 +1,13 @@
 ﻿/*
-Copyright: Copyright Piotr Półtorak 2015-2016.
-License: $(WEB boost.org/LICENSE_1_0.txt, Boost License 1.0).
-Authors: Piotr Półtorak
-*/
+ Copyright: Copyright Piotr Półtorak 2015-2016.
+ License: $(WEB boost.org/LICENSE_1_0.txt, Boost License 1.0).
+ Authors: Piotr Półtorak
+ */
 
 module draft.database.storage;
 
-import std.stdio;
 import std.traits;
-
+import std.stdio;
 enum magicString = "DLDb";
 enum  PageNo:uint { Null =0, Master=1};
 
@@ -41,7 +40,68 @@ struct DbTableMetaInfo
 {
 
 }
-
+struct DbPointer
+{
+	ulong rawData;
+	
+	ulong cellData()
+	{
+		// get lower 7 bytes
+		return rawData & 0x00FF_FFFF_FFFF_FFFF;
+	}
+	
+	void cellData(ulong cellData)
+	{
+		// get lower 7 bytes
+		rawData = rawData & 0xFF00_0000_0000_0000;
+		rawData = rawData | cellData;
+	}
+	
+	uint offset()
+	{
+		// get higher 4 bytes with cleared flag byte
+		return cast(uint)(rawData >> 32) & 0x00FF_FFFF ;
+	}
+	
+	void offset(uint offset)
+	{
+		rawData = rawData & 0xFF00_0000_FFFF_FFFF;
+		rawData = rawData | (cast(ulong)offset << 32);
+	}
+	
+	uint pageNo()
+	{
+		// get lower 4 bytes
+		return cast(uint)rawData;
+	}
+	
+	void pageNo(uint pageNo)
+	{
+		rawData = rawData & 0xFFFF_FFFF_0000_0000;
+		rawData = rawData | pageNo;
+	}
+	
+	ubyte flags()
+	{
+		// get the highest byte
+		return cast(ubyte)(rawData >> 56);
+	}
+	
+	void flags(ubyte flags)
+	{
+		// get the highest byte
+		
+		rawData = rawData & 0x00FF_FFFF_FFFF_FFFF;
+		rawData =  rawData | (cast(ulong)flags << 56);
+	}
+	
+	string toString()
+	{
+		import std.conv;
+		return "{flags=" ~ flags.to!string ~ " offset=" ~ offset.to!string ~ " pageNo=" ~ pageNo.to!string ~ "}";
+	}
+	
+}
 struct DbPage
 {
 	uint mTableHeaderOffset = 0;
@@ -83,7 +143,7 @@ struct DbPage
 		mRawBytes[offset..offset + data.length] = data;
 	}
 
-
+	
 	uint loadLookupPointer(uint index)
 	{
 		auto offset = mTableHeaderOffset+DbTableHeader.sizeof + index * uint.sizeof;
@@ -101,9 +161,9 @@ struct DbPage
 		return *(cast(DbTableHeader*)cast(void*)mRawBytes[mTableHeaderOffset..mTableHeaderOffset+DbTableHeader.sizeof]);
 	}
 
-	DbPointer readSlot(uint offset, int size)
+	DbPointer readSlot(uint index, int size)
 	{
-
+		uint offset = index * cast(uint)DbPointer.sizeof;
 		DbPointer pointer = DbPointer(*cast(ulong*)(cast(void*)(&mRawBytes[offset])));
 		return pointer;
 	}
@@ -123,6 +183,7 @@ struct DbPage
 	{
 		assert (mPageNo);
 		import std.range;
+		import std.stdio;
 		int lineNo;
 		writefln( "-------------------- Page %2d --------------------------", mPageNo);
 		foreach(line; chunks(cast(ubyte[]) mRawBytes,bytesPerLine))
@@ -149,7 +210,7 @@ struct DbCell
 		data = cellData;
 	}
 
-
+	
 	this(ulong cellData)
 	{
 		data.length = cellData.sizeof;
@@ -299,62 +360,7 @@ struct DbCell
 	}
 }
 
-struct DbPointer
-{
-	ulong rawData;
 
-	ulong cellData()
-	{
-		// get lower 7 bytes
-		return rawData & 0x00FF_FFFF_FFFF_FFFF;
-	}
-
-	void cellData(ulong cellData)
-	{
-		// get lower 7 bytes
-		rawData = rawData & 0xFF00_0000_0000_0000;
-		rawData = rawData | cellData;
-	}
-
-	uint offset()
-	{
-		// get higher 4 bytes with cleared flag byte
-		return cast(uint)(rawData >> 32) & 0x00FF_FFFF ;
-	}
-
-	void offset(uint offset)
-	{
-		rawData = rawData & 0xFF00_0000_FFFF_FFFF;
-		rawData = rawData | (cast(ulong)offset << 32);
-	}
-
-	uint pageNo()
-	{
-		// get lower 4 bytes
-		return cast(uint)rawData;
-	}
-
-	void pageNo(uint pageNo)
-	{
-		rawData = rawData & 0xFFFF_FFFF_0000_0000;
-		rawData = rawData | pageNo;
-	}
-
-	ubyte flags()
-	{
-		// get the highest byte
-		return cast(ubyte)(rawData >> 56);
-	}
-
-	void flags(ubyte flags)
-	{
-		// get the highest byte
-
-		rawData = rawData & 0x00FF_FFFF_FFFF_FFFF;
-		rawData =  rawData | (cast(ulong)flags << 56);
-	}
-
-}
 
 
 struct DbFile
@@ -389,7 +395,7 @@ struct DbFile
 		return result;
 	}
 
-	void dumb()
+	void dump()
 	{
 		for(int i=1; i <= (mBuffer.length / mPageSize); ++i)
 		{
@@ -449,23 +455,24 @@ struct DbStorage
 		// find slot for a new pointer in slotPage
 		// from time to time new lookup pages need to be added
 		DbPage slotPage = mNavigator.aquireDbSlotPage(tableRootPage, itemCount+1);
-		auto slotIndex = itemCount % mPageSize;
+		auto slotsPerPage = mPageSize / 8;
+		auto slotPageIndex = (itemCount) % slotsPerPage;
 
 		if (cell.data.length > (DbPointer.sizeof - DbFlags.sizeof))
 		{
 			// we need a separate storage
 
 			//empty table
-			if (tableHeader.freeDataPtr.pageNo == PageNo.Null)
-			{
-				tableHeader.freeDataPtr = mDataAllocator.initialPointer();
-			}
+	
 			DbPointer newDataPointer = mDataAllocator.allocateData(tableHeader.freeDataPtr,cell.data);
-			DbPage dataPage = mDbFile.loadPage(tableHeader.freeDataPtr.pageNo);
-			dataPage.writeCell(tableHeader.freeDataPtr.offset,cell.data);
-			mDbFile.writePage(tableHeader.freeDataPtr.pageNo,dataPage.mRawBytes);
-			slotPage.writeSlot(cast(uint)slotIndex,tableHeader.freeDataPtr);
+			DbPage dataPage = mDbFile.loadPage(newDataPointer.pageNo);
+			dataPage.writeCell(newDataPointer.offset,cell.data);
+			mDbFile.writePage(newDataPointer.pageNo,dataPage.mRawBytes);
+			slotPage.writeSlot(cast(uint)slotPageIndex,newDataPointer);
+
+			//update free pointer
 			tableHeader.freeDataPtr = newDataPointer;
+			tableHeader.freeDataPtr.offset = newDataPointer.offset+cast(uint)cell.data.length;
 
 		}
 		else
@@ -474,9 +481,8 @@ struct DbStorage
 			DbPointer pointer;
 			pointer.flags = pointer.flags | DbFlags.CellEmbedded;
 			pointer.cellData(*cast(ulong*)(cast(void*)cell.data));
-			slotPage.writeSlot(cast(uint)slotIndex,pointer);
+			slotPage.writeSlot(cast(uint)slotPageIndex,pointer);
 		}
-
 		tableHeader.itemCount++;
 		tableRootPage.writeTableHeader(tableHeader);
 		mDbFile.writePage(slotPage.mPageNo, slotPage.mRawBytes);
@@ -495,13 +501,12 @@ struct DbStorage
 	{
 		DbPage rootPage = mDbFile.loadPage(tableRootPage);
 		DbPage slotPage = mNavigator.getDbSlotPage(rootPage, id);
-
-		uint offset = cast(uint)((id-1) % mPageSize * ulong.sizeof);
-
-		DbPointer pointer = slotPage.readSlot(offset,DbPointer.sizeof);
+		auto slotsPerPage = mPageSize / 8;
+		uint slotIndex = cast(uint)((id-1) % slotsPerPage);
+		DbPointer pointer = slotPage.readSlot(slotIndex,DbPointer.sizeof);
 
 		DbCell cell;
-		//Check the flag
+		//Check id data is embedded in the pointer
 		if (pointer.flags & DbFlags.CellEmbedded)
 		{
 			cell = DbCell(pointer.cellData);
@@ -515,42 +520,104 @@ struct DbStorage
 		return cell.to!T;
 	}
 
-	void removeItem(T)(ulong pageNo, T item)
+	// TODO updateItem and addItem has common parts. Is it worth it to extract a few lines for both?
+	void updateItem(T)(uint tableRootPage, ulong itemId, T item)
 	{
+		// read old item to release its storage
+
+		DbPage rootPage = mDbFile.loadPage(tableRootPage);
+		DbTableHeader tableHeader = rootPage.readTableHeader;
+
+		DbPage slotPage = mNavigator.getDbSlotPage(rootPage, itemId);
+
+		uint slotIndex = cast(uint)((itemId-1) % mPageSize);
+		DbPointer itemPointer = slotPage.readSlot(slotIndex,DbPointer.sizeof);
+
+		DbCell cell;
+		cell.from(item);
+
+		//Check if the previous data is embedded or not into the pointer
+		if (itemPointer.flags & !DbFlags.CellEmbedded)
+		{
+			//TODO
+			//check how much space is allocated and reuse if possible
+			//have to relese unneeded storage
+
+		}
+
+		if (cell.data.length > (DbPointer.sizeof - DbFlags.sizeof))
+		{
+			// we need a separate storage
+			DbPointer newDataPointer = mDataAllocator.allocateData(tableHeader.freeDataPtr,cell.data);
+			DbPage dataPage = mDbFile.loadPage(newDataPointer.pageNo);
+			dataPage.writeCell(newDataPointer.offset,cell.data);
+			mDbFile.writePage(newDataPointer.pageNo,dataPage.mRawBytes);
+			slotPage.writeSlot(cast(uint)slotIndex,newDataPointer);
+			//update free pointer
+			tableHeader.freeDataPtr = newDataPointer;
+			tableHeader.freeDataPtr.offset = newDataPointer.offset+cast(uint)cell.data.length;
+		}
+		else
+		{
+			// data fits in the slot
+			DbPointer newPointer;
+			newPointer.flags = newPointer.flags | DbFlags.CellEmbedded;
+			newPointer.cellData(*cast(ulong*)(cast(void*)cell.data));
+			slotPage.writeSlot(cast(uint)slotIndex,newPointer);
+		}
+
+		rootPage.writeTableHeader(tableHeader);
+		mDbFile.writePage(slotPage.mPageNo, slotPage.mRawBytes);
+		mDbFile.writePage(tableRootPage, rootPage.mRawBytes);
 	}
 
-	void updateItem(T)(ulong pageNo, ulong id, T item)
+	
+	void removeItem(T)(ulong pageNo, T item)
 	{
+		assert(0);
 	}
 
 	void dropTable(ulong pageNo)
 	{
+		assert(0);
 	}
-
 }
-
 struct DbDataAllocator
 {
 	DbFile * mDbFile;
 
 	DbPointer allocateData(DbPointer freeDataPtr, void[] data)
 	{
-		assert (freeDataPtr.pageNo != PageNo.Null);
-		DbPointer pointerNewFree = freeDataPtr;
-		uint newOffset = freeDataPtr.offset + cast(uint)data.length;
 
-		assert(newOffset < mDbFile.mPageSize);
-		pointerNewFree.offset = newOffset;
-		return pointerNewFree;
+		uint newOffset = freeDataPtr.offset;
+		uint newPageNo = freeDataPtr.pageNo;
+		if ( (newOffset + data.length) > mDbFile.mPageSize || freeDataPtr.pageNo == PageNo.Null)
+		{
+			freeDataPtr.pageNo = mDbFile.reserveFreePage();
+			freeDataPtr.offset = 0;
+		}
+		assert(freeDataPtr.offset < mDbFile.mPageSize);
+		return freeDataPtr;
 	}
 
-	DbPointer initialPointer()
+
+
+	unittest
 	{
-		DbPointer pointer;
-		uint pageId = mDbFile.reserveFreePage();
-		pointer.pageNo = pageId;
-		pointer.offset = 0;
-		return pointer;
+		writeln("Unittest [DbDataAllocator] start");
+		DbDataAllocator allocator;
+
+		short size;
+		ulong[ushort] buckets;
+		uint pageSize = 128;
+		for(ushort i=12; i < pageSize; i=cast(ushort)(i+4))
+		{
+			buckets[i] =1;
+		}
+
+		//writefln("For pageSize=%d there are %d buckets, buckets=%s",pageSize, buckets.length, buckets);
+
+		writeln("Unittest [DbDataAllocator] passed!");
 	}
 
 }
@@ -569,69 +636,74 @@ struct DbNavigator
 
 	DbPage aquireDbSlotPage(DbPage rootPage, ulong itemId)
 	{
-		auto slotPage = 0;
-		// check if we need a new lookup page
-		//isLookupAllocNeeded(itemId);
-		//auto left = mPageSize - mTableHeader.mItemCount * DbPointer.sizeof;
-		auto slotsPerPage = mPageSize / 8;
 
-		auto slotPageIndex = itemId / slotsPerPage;
+		uint slotPageNo = 0;
+		uint slotsPerPage = mPageSize / 8;
+		uint lookupIndex = cast(uint)((itemId-1) / slotsPerPage);
 
-		if(itemId % slotsPerPage == 1)
+
+		DbPage finalLookupPage;
+
+		//Firstly check if a new slot page is needed.
+		if( isSlotPageAllocNeeded(itemId) )
 		{
-			slotPage = mDbFile.reserveFreePage();
-			rootPage.writeLookupPointer(cast(uint)slotPageIndex,slotPage);
+			slotPageNo = mDbFile.reserveFreePage();
+			finalLookupPage = aquireFinalLookupPage(rootPage, itemId);
+			finalLookupPage.writeLookupPointer(lookupIndex,slotPageNo);
 
 		}
 		else
 		{
-			slotPage = rootPage.loadLookupPointer(cast(uint)slotPageIndex);
+			finalLookupPage = aquireFinalLookupPage(rootPage, itemId);
+			slotPageNo = finalLookupPage.loadLookupPointer(lookupIndex);
 		}
-		// for now only one level of lookup
-		return mDbFile.loadPage(slotPage);
+
+		return mDbFile.loadPage(slotPageNo);
 	}
 
 	DbPage getDbSlotPage(DbPage rootPage, ulong itemId)
 	{
 		auto slotsPerPage = mPageSize / 8;
-		auto slotPageIndex = itemId / slotsPerPage;
-		auto slotPage = rootPage.loadLookupPointer(cast(uint)slotPageIndex);
+		uint slotPageIndex = cast(uint)((itemId-1) / slotsPerPage);
+		DbPage finalLookupPointer = aquireFinalLookupPage(rootPage, itemId);
+		auto slotPage = finalLookupPointer.loadLookupPointer(slotPageIndex);
 		return mDbFile.loadPage(slotPage);
 	}
 
-	void allocateLookupPages(uint itemCount)
+	DbPage aquireFinalLookupPage(DbPage rootPage, ulong itemId)
 	{
-		if (isSlotPageAllocNeeded(itemCount))
+		DbPage finalLookupPage = rootPage;
+		// Check if lookup structure should be expanded	
+		if ( isLookupPageAllocNeeded(itemId))
 		{
-			// Allocate a new page for DbPointer
-			DbPage newPage;
-			newPage.mPageNo = mDbFile.reserveFreePage();
-			uint offset = newPage.mTableHeaderOffset+cast(uint)DbTableHeader.sizeof;
-			newPage.writeLookupPointer(offset,newPage.mPageNo);
+			// TODO Handle tree expansion
+			assert(0);
 		}
-		
-		if (isLookupAllocNeeded(itemCount))
+		else
 		{
-			
-		}
-	}
 
+		}
+
+		return finalLookupPage;
+	}
 
 	bool isSlotPageAllocNeeded(ulong itemId)
 	{
-		return false;
+		return (itemId % (mPageSize/DbPointer.sizeof) == 1);
 	}
-	
-	bool isLookupAllocNeeded(ulong itemId)
+
+	bool isLookupPageAllocNeeded(ulong itemId)
 	{
+		uint slotsPerPage = mPageSize / DbPointer.sizeof;
+		// TODO Add condition for lookup tree expansion
 		return false;
 	}
 
 	unittest
 	{
-		writeln("Unittest [DbAllocator] start");
+		writeln("Unittest [DbNavigator] start");
 		DbNavigator navigator;
-		writeln("Unittest [DbAllocator] passed!");
+		writeln("Unittest [DbNavigator] passed!");
 	}
 
 }

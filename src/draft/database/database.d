@@ -10,7 +10,7 @@ import draft.database.collection;
 import draft.database.storage;
 import std.algorithm;
 import std.array;
-import std.stdio;
+
 
 struct DataBase
 {
@@ -30,7 +30,7 @@ struct DataBase
 	// TODO
 	this(string path)
 	{
-
+		assert(0);
 	}
 
 	void createStorage()

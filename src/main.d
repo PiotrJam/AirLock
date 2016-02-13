@@ -83,46 +83,64 @@ unittest
 	writeln("Unittest [main] 1 passed!");
 
 }
-/*
+
 unittest
 {
 	writeln("Test 2 start");
 	static struct A
 	{
-		long a;
-		string b;
+		string a;
+		int[] b;
 	}
 
-	DbFile dbFile = DbFile(rawDbFile);
-	DbStorage dbStorage = DbStorage(dbFile);
-	DataBase db = DataBase(&dbStorage);
-	auto songDbColl = db.collection!A("B.songs");
+	DataBase db = DataBase(null,128);
+	auto collectionA = db.createCollection!A("Scores");
 
-	if (songDbColl.empty)
-	{
-
-	}
-	writeln("************** Reading   *****************");
-	songDbColl = db.collection!A("B.songs");
-    songDbColl.setKey!"a";
-
-	//writeln (songColl);
-	auto found = songDbColl.filter!(a => a.b.canFind("ma"));
-	writeln (found);
-
-	writeln("************** Update   *****************");
+	[A("James",[1,2,3]), A("Hero 2", [345,-94321,0,6621]), A("R2D2",[13,-987654321])].copy(collectionA);
+	collectionA = db.collection!A("Scores");
+	auto found = collectionA.filter!(a => a.a.canFind("2"));
 	foreach(oldItem;found)
 	{
-		A newItem = {10,oldItem.b ~ " <updated>"};
-		writeln(newItem);
-		songDbColl.update(oldItem,newItem);
+		A newItem = {oldItem.a ~ " <updated>", [3]};
+
+		collectionA.update(oldItem,newItem);
 	}
+	assert(collectionA.array == [A("James",[1,2,3]), A("Hero 2 <updated>", [3]), A("R2D2 <updated>",[3])]);
+
 	writeln("Test 2 passed!");
 }
 
 unittest
 {
 	writeln("Test 3 start");
+	static struct A
+	{
+		string a;
+		int[] b;
+		ubyte c;
+	}
+	
+	DataBase db = DataBase(null,128);
+	auto collectionA = db.createCollection!A("Many");
+	
+	for (int i = 0 ; i < 200; ++i)
+	{
+		import std.conv;
+		auto a = A((i+1000).to!string(),[i+1,i+2,i+3,i+4], cast(ubyte)i);
+		collectionA.put(a);
+
+	}
+	collectionA = db.collection!A("Many");
+
+	collectionA.update(A("1002",[3,4,5,6], 2), A("Boooom",[3,4,5,6], 2));
+
+	writeln("Test 3 passed!");
+}
+
+/*
+unittest
+{
+	writeln("Test 4 start");
 	import std.datetime;
 
 	static struct Author
@@ -151,7 +169,8 @@ unittest
 	DataBase db = DataBase(&dbStorage);
 	auto forum = db.collection!Post("C.posts");
 	forum.put(Post());
-	writeln("Test 3 passed!");
+	writeln("Test 4 passed!");
 }
+
 
 */

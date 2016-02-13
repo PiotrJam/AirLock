@@ -51,18 +51,20 @@ struct Collection(T)
 
 	void update(T oldItem, T newItem)
 	{
-		ulong id = 0;//mDbStorage.getNextDbItemId(0);
+		ulong id = 1;
 		while (id != 0)
 		{
-			//auto item = mDbStorage.fetchDbItem!T(id);
-			//if (item == oldItem)
+			auto item = mDbStorage.fetchDbItem!T(mTableRootPage, id);
+			if (item == oldItem)
 			{
-				//mDbStorage.updateItem(id,newItem);
+				mDbStorage.updateItem(mTableRootPage, id, newItem);
 			}
-			//id = mDbStorage.getNextDbItemId(id);
+			id = mDbStorage.getNextDbItemId(mTableRootPage, id);
 		}
 	}
 
+	//TODO
+	//add opIndex
 
 	void remove(T item)
 	{
