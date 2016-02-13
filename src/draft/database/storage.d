@@ -8,10 +8,22 @@ module draft.database.storage;
 
 import std.traits;
 import std.stdio;
-enum magicString = "DLDb";
-enum  PageNo:uint { Null =0, Master=1};
 
-enum DbFlags:ubyte {CellEmbedded = 2^^0, Compressed = 2^^1}
+enum magicString = "DLDb";
+
+//in bytes
+immutable dbAllocResolution = 4;
+
+enum PageNo: uint 		 { Null = 0, Master = 1 }
+
+enum DbItemFlags: ubyte  { CellEmbedded = 2<<0, Compressed = 2<<1, Fragmented = 2<<2 }
+
+enum DbTableFlags: ubyte { FixedSizeItem = 2<<0, MetaInfoEmbedded = 2<<1 }
+
+enum DbType: ubyte	   	 { Char, Wchar, Dchar, 
+						   Ubyte, Byte, Ushort, Short, Uint, Int, Ulong, Long, 
+						   Float, Double, 
+						   Array, StructStart, StructEnd, DbReferece }
 
 struct TableInfo
 {
@@ -19,30 +31,47 @@ struct TableInfo
 	uint pageNo;
 }
 
+struct HeapInfo
+{
+	uint tableRootPage;
+	uint heapPageNo;
+	DbPointer bitMapPtr;
+}
+
 struct DbHeader  
 {
 align(1):
 	immutable(char)[4] magicString= .magicString; 
 	uint pageSize = 0;
-	uint changeCounter = 0;
+	uint heapPage = PageNo.Null;
+	uint freePage = PageNo.Null;
 }
-
 
 struct DbTableHeader  
 {
 align(1):
 	ulong itemCount = 0;
 	DbPointer freeDataPtr;
-
+	uint metaInfoPageNo =0;
 }
 
 struct DbTableMetaInfo
 {
-
+	DbType[] typeInfoArray;
 }
+
+
+struct DbHeapHeader
+{
+	uint nextHeapPage = PageNo.Null;
+	uint prevHeapPaeg = PageNo.Null;
+	uint heapInfoCount = 0;
+	uint dummy;
+}
+
 struct DbPointer
 {
-	ulong rawData;
+	ulong rawData = 0;
 	
 	ulong cellData()
 	{
@@ -106,18 +135,14 @@ struct DbPage
 {
 	uint mTableHeaderOffset = 0;
 	uint mDbHeaderOffset = 0;
-	uint mPageSize = 0;
-	uint mPayloadSize = 0;
 	uint mPageNo = PageNo.Null;
-	void[] mRawBytes = null;
+	ubyte[] mRawBytes = null;
 
 	this (uint pageNo, uint pageSize)
 	{
 		mTableHeaderOffset = (pageNo == PageNo.Master) ? DbHeader.sizeof : 0;
-		mPageSize = pageSize;
-		mRawBytes.length = mPageSize;
+		mRawBytes.length = pageSize;
 		mPageNo = pageNo;
-		mPayloadSize = mPageSize - mTableHeaderOffset;
 	}
 
 	void writeDbHeader(DbHeader dbHeader)
@@ -125,40 +150,61 @@ struct DbPage
 		mRawBytes[0..DbHeader.sizeof] = cast(ubyte[])(cast(void*)&dbHeader)[0..DbHeader.sizeof];
 	}
 
+	DbHeader readDbHeader()
+	{
+		return *(cast(DbHeader*)cast(void*)mRawBytes[0..DbTableHeader.sizeof]);
+	}
+
 	void writeTableHeader(DbTableHeader tableHeader)
 	{
 		mRawBytes[mTableHeaderOffset..mTableHeaderOffset+DbTableHeader.sizeof] = cast(ubyte[])(cast(void*)&tableHeader)[0..DbTableHeader.sizeof];
+	}
+
+	DbTableHeader readTableHeader()
+	{
+		return *(cast(DbTableHeader*)cast(void*)mRawBytes[mTableHeaderOffset..mTableHeaderOffset+DbTableHeader.sizeof]);
+	}
+
+	void writeTableMetaInfo(DbTableMetaInfo tableMetaInfo )
+	{
+		size_t typesLength = tableMetaInfo.typeInfoArray.length;
+		// TODO Up to 256 elements
+		ubyte length = cast(ubyte)(1+typesLength);
+		mRawBytes[mTableHeaderOffset+DbTableHeader.sizeof] = length;
+	}
+
+	DbTableMetaInfo readTableMetaInfo()
+	{
+		return DbTableMetaInfo.init;
+	}
+
+	void writeHeapHeader(DbHeapHeader heapHeader)
+	{
+		mRawBytes[0..DbHeapHeader.sizeof] = cast(ubyte[])(cast(void*)&heapHeader)[0..DbHeapHeader.sizeof];
+	}
+
+	DbHeapHeader readHeapHeader()
+	{
+		return *(cast(DbHeapHeader*)cast(void*)mRawBytes[0..DbHeapHeader.sizeof]);
+	}
+
+	void writeHeapInfo(uint index, HeapInfo heapInfo)
+	{
+		uint offset = (index * cast(uint)HeapInfo.sizeof) + cast(uint)DbHeapHeader.sizeof;
+		mRawBytes[offset..offset+HeapInfo.sizeof] = cast(ubyte[])(cast(void*)&heapInfo)[0..HeapInfo.sizeof];
+	}
+
+	HeapInfo readHeapInfo(uint index)
+	{
+		uint offset = (index * cast(uint)HeapInfo.sizeof) + cast(uint)DbHeapHeader.sizeof;
+		return *(cast(HeapInfo*)cast(void*)mRawBytes[offset..offset+HeapInfo.sizeof]);
 	}
 
 	void writeSlot(uint index, DbPointer pointer)
 	{
 		uint offset = index * cast(uint)DbPointer.sizeof;
 		ulong rawPointer = pointer.rawData;
-		mRawBytes[offset..offset + DbPointer.sizeof] = (cast(void*)&rawPointer)[0..DbPointer.sizeof];
-
-	}
-
-	void writeCell(uint offset, void[] data)
-	{
-		mRawBytes[offset..offset + data.length] = data;
-	}
-
-	
-	uint loadLookupPointer(uint index)
-	{
-		auto offset = mTableHeaderOffset+DbTableHeader.sizeof + index * uint.sizeof;
-		return *(cast(uint*)cast(void*)mRawBytes[offset..offset+uint.sizeof]);
-	}
-
-	void writeLookupPointer(uint index, uint pointer)
-	{
-		auto offset = mTableHeaderOffset+DbTableHeader.sizeof + index * uint.sizeof;
-		mRawBytes[offset..offset + pointer.sizeof] = cast(void[])(cast(void*)(&pointer))[0..pointer.sizeof];
-	}
-
-	DbTableHeader readTableHeader()
-	{
-		return *(cast(DbTableHeader*)cast(void*)mRawBytes[mTableHeaderOffset..mTableHeaderOffset+DbTableHeader.sizeof]);
+		mRawBytes[offset..offset + DbPointer.sizeof] = cast(ubyte[])(cast(void*)&rawPointer)[0..DbPointer.sizeof];
 	}
 
 	DbPointer readSlot(uint index, int size)
@@ -168,15 +214,37 @@ struct DbPage
 		return pointer;
 	}
 
-	DbPointer readPointer(uint offset)
+	void writeCell(uint offset, ubyte[] data)
 	{
-		return *cast(DbPointer*)mRawBytes[offset..offset + DbPointer.sizeof];
+		mRawBytes[offset..offset + data.length] = data;
 	}
 
 	DbCell readCell(uint offset)
 	{
 		DbCell cell = DbCell(mRawBytes[offset..$]);
 		return cell;
+	}
+
+	void writeLookupPointer(uint index, uint pointer)
+	{
+		auto offset = mTableHeaderOffset+DbTableHeader.sizeof + index * uint.sizeof;
+		mRawBytes[offset..offset + pointer.sizeof] = cast(ubyte[])(cast(void*)(&pointer))[0..pointer.sizeof];
+	}
+
+	uint readLookupPointer(uint index)
+	{
+		auto offset = mTableHeaderOffset+DbTableHeader.sizeof + index * uint.sizeof;
+		return *(cast(uint*)cast(void*)mRawBytes[offset..offset+uint.sizeof]);
+	}
+
+	void writeBitMap(uint offset, ubyte[] bitMap)
+	{
+		mRawBytes[offset..offset + bitMap.length] = bitMap;
+	}
+	
+	ubyte[] readBitMap(uint offset, uint lenght)
+	{
+		return mRawBytes[offset..offset+lenght];
 	}
 
 	void dump(int bytesPerLine = 8)
@@ -203,9 +271,9 @@ struct DbPage
 
 struct DbCell
 {
-	void[] data;
+	ubyte[] data;
 
-	this(void[] cellData)
+	this(ubyte[] cellData)
 	{
 		data = cellData;
 	}
@@ -214,7 +282,7 @@ struct DbCell
 	this(ulong cellData)
 	{
 		data.length = cellData.sizeof;
-		data[0..cellData.sizeof] = (cast(void*)&cellData)[0..cellData.sizeof];
+		data[0..cellData.sizeof] = cast(ubyte[])((cast(void*)&cellData)[0..cellData.sizeof]);
 	}
 
 	void from (T)(T item)
@@ -365,14 +433,16 @@ struct DbCell
 
 struct DbFile
 {
-	void[] mBuffer;
+	string mPath;
 	uint mPageSize;
+	uint mPageCount;
+	ubyte[] mBuffer;
 	uint[] freePageIds = [];
 	
-	this(ubyte[] buffer, uint pageSize)
+	this(string path, uint pageSize)
 	{
+		mPath = path;
 		mPageSize = pageSize;
-		mBuffer = buffer;
 	}
 	
 	DbPage loadPage(uint pageNo)
@@ -382,7 +452,7 @@ struct DbFile
 		return page;
 	}
 
-	void writePage(uint pageNo, void[] pageData)
+	void writePage(uint pageNo, ubyte[] pageData)
 	{
 		mBuffer[cast(size_t)(pageNo-1)*mPageSize..cast(size_t)pageNo*mPageSize] = pageData;
 	}
@@ -392,6 +462,7 @@ struct DbFile
 
 		mBuffer.length += mPageSize*count;
 		uint result = cast(uint)mBuffer.length / mPageSize;
+		mPageCount += count;
 		return result;
 	}
 
@@ -410,33 +481,28 @@ struct DbStorage
 	DbFile * mDbFile;
 	DbNavigator mNavigator;
 	DbDataAllocator mDataAllocator;
-	uint mPageSize;
 
 	this(DbFile * dbFile)
 	{
 		mDbFile = dbFile;
-		mPageSize = dbFile.mPageSize;
-		mNavigator = DbNavigator(dbFile, mPageSize);
+		mNavigator = DbNavigator(dbFile, mDbFile.mPageSize);
 		mDataAllocator = DbDataAllocator(dbFile);
 	}
 
 	uint createTable(uint pageNo)
 	{
-		if (pageNo == PageNo.Null )
-		{
-			// allocate a new page if invalid page number provided
-			// get new or unused page
-			pageNo = mDbFile.reserveFreePage;
-		}
-		else if (pageNo == PageNo.Master)
-		{
+		assert(pageNo == PageNo.Null);
 
-		}
+		pageNo = mDbFile.reserveFreePage;
 
-		DbPage page = DbPage(pageNo,mPageSize);
-		if(pageNo == PageNo.Master)
+		DbPage page = mDbFile.loadPage(pageNo);
+		if(pageNo == PageNo.Master) // this means we have to initialize all db info
 		{
-			page.writeDbHeader(DbHeader());
+			DbHeader dbHeader;
+			dbHeader.pageSize = mDbFile.mPageSize;
+			dbHeader.heapPage = mDbFile.reserveFreePage;
+			page.writeDbHeader(dbHeader);
+			mDataAllocator.mHeapPageNo = dbHeader.heapPage;
 		}
 		page.writeTableHeader(DbTableHeader());
 		mDbFile.writePage(pageNo, page.mRawBytes);
@@ -455,10 +521,11 @@ struct DbStorage
 		// find slot for a new pointer in slotPage
 		// from time to time new lookup pages need to be added
 		DbPage slotPage = mNavigator.aquireDbSlotPage(tableRootPage, itemCount+1);
-		auto slotsPerPage = mPageSize / 8;
+
+		auto slotsPerPage = mDbFile.mPageSize / 8;
 		auto slotPageIndex = (itemCount) % slotsPerPage;
 
-		if (cell.data.length > (DbPointer.sizeof - DbFlags.sizeof))
+		if (cell.data.length > (DbPointer.sizeof - DbItemFlags.sizeof))
 		{
 			// we need a separate storage
 
@@ -479,10 +546,11 @@ struct DbStorage
 		{
 			// data fits in the slot
 			DbPointer pointer;
-			pointer.flags = pointer.flags | DbFlags.CellEmbedded;
+			pointer.flags = pointer.flags | DbItemFlags.CellEmbedded;
 			pointer.cellData(*cast(ulong*)(cast(void*)cell.data));
 			slotPage.writeSlot(cast(uint)slotPageIndex,pointer);
 		}
+		//update table header
 		tableHeader.itemCount++;
 		tableRootPage.writeTableHeader(tableHeader);
 		mDbFile.writePage(slotPage.mPageNo, slotPage.mRawBytes);
@@ -501,13 +569,15 @@ struct DbStorage
 	{
 		DbPage rootPage = mDbFile.loadPage(tableRootPage);
 		DbPage slotPage = mNavigator.getDbSlotPage(rootPage, id);
-		auto slotsPerPage = mPageSize / 8;
+
+		auto slotsPerPage = mDbFile.mPageSize / 8;
 		uint slotIndex = cast(uint)((id-1) % slotsPerPage);
 		DbPointer pointer = slotPage.readSlot(slotIndex,DbPointer.sizeof);
 
 		DbCell cell;
 		//Check id data is embedded in the pointer
-		if (pointer.flags & DbFlags.CellEmbedded)
+
+		if (pointer.flags & DbItemFlags.CellEmbedded)
 		{
 			cell = DbCell(pointer.cellData);
 		}
@@ -530,14 +600,16 @@ struct DbStorage
 
 		DbPage slotPage = mNavigator.getDbSlotPage(rootPage, itemId);
 
-		uint slotIndex = cast(uint)((itemId-1) % mPageSize);
+		uint slotIndex = cast(uint)((itemId-1) % mDbFile.mPageSize);
+
 		DbPointer itemPointer = slotPage.readSlot(slotIndex,DbPointer.sizeof);
 
 		DbCell cell;
 		cell.from(item);
 
-		//Check if the previous data is embedded or not into the pointer
-		if (itemPointer.flags & !DbFlags.CellEmbedded)
+		//Check if the previous data is embedded into DbPointer or not
+		if (itemPointer.flags & !DbItemFlags.CellEmbedded)
+
 		{
 			//TODO
 			//check how much space is allocated and reuse if possible
@@ -545,7 +617,8 @@ struct DbStorage
 
 		}
 
-		if (cell.data.length > (DbPointer.sizeof - DbFlags.sizeof))
+
+		if (cell.data.length > (DbPointer.sizeof - DbItemFlags.sizeof))
 		{
 			// we need a separate storage
 			DbPointer newDataPointer = mDataAllocator.allocateData(tableHeader.freeDataPtr,cell.data);
@@ -561,7 +634,7 @@ struct DbStorage
 		{
 			// data fits in the slot
 			DbPointer newPointer;
-			newPointer.flags = newPointer.flags | DbFlags.CellEmbedded;
+			newPointer.flags = newPointer.flags | DbItemFlags.CellEmbedded;
 			newPointer.cellData(*cast(ulong*)(cast(void*)cell.data));
 			slotPage.writeSlot(cast(uint)slotIndex,newPointer);
 		}
@@ -585,6 +658,19 @@ struct DbStorage
 struct DbDataAllocator
 {
 	DbFile * mDbFile;
+	uint mHeapPageNo = PageNo.Null;
+
+	this(DbFile * dbFile)
+	{
+		assert(dbFile);
+		mDbFile = dbFile;
+		if (mDbFile.mPageCount > 0)
+		{
+			DbPage masterPage = mDbFile.loadPage(PageNo.Master);
+			DbHeader header = masterPage.readDbHeader;
+			mHeapPageNo =  header.heapPage ;
+		}
+	}
 
 	DbPointer allocateData(DbPointer freeDataPtr, void[] data)
 	{
@@ -600,23 +686,63 @@ struct DbDataAllocator
 		return freeDataPtr;
 	}
 
+	DbPointer allocateData2(uint tableRootPage, ubyte[] cellData)
+	{
+		assert(mHeapPageNo != PageNo.Null);
 
+		DbPage heapPage = mDbFile.loadPage(mHeapPageNo);
+		DbHeapHeader heapHeader = heapPage.readHeapHeader;
+
+		for (int i = 0; i < heapHeader.heapInfoCount; ++i)
+		{
+			findFreeSpace(heapPage.readHeapInfo(i), cellData.length);
+		}
+
+		assert(mDbFile.mPageSize >= DbHeapHeader.sizeof + heapHeader.heapInfoCount * cast(uint)HeapInfo.sizeof);
+		uint left = mDbFile.mPageSize - cast(uint)DbHeapHeader.sizeof - heapHeader.heapInfoCount * cast(uint)HeapInfo.sizeof;
+
+		if(left == 0)
+		{
+			//allocate new heapPage
+		}
+
+		return DbPointer.init;
+	}
+
+	DbPointer findFreeSpace(HeapInfo heapInfo, ulong length)
+	{
+		DbPointer pointer;
+		DbPage bitMapPage = mDbFile.loadPage(heapInfo.bitMapPtr.pageNo);
+		ubyte[] bitMap = bitMapPage.readBitMap(heapInfo.bitMapPtr.offset, bitmapSize());
+		return pointer;
+	}
+
+	int bitmapSize()
+	{
+		// 8 means 8 bits per byte
+		return mDbFile.mPageSize / ( 8 * dbAllocResolution);
+	}
 
 	unittest
 	{
 		writeln("Unittest [DbDataAllocator] start");
-		DbDataAllocator allocator;
 
-		short size;
-		ulong[ushort] buckets;
-		uint pageSize = 128;
-		for(ushort i=12; i < pageSize; i=cast(ushort)(i+4))
+		uint pageSize = 2^^10;
+		uint testTableTootPage = 1;
+		DbDataAllocator allocator = DbDataAllocator(new DbFile("",pageSize));
+		uint heapPage = allocator.mDbFile.reserveFreePage;
+		allocator.mHeapPageNo = heapPage;
+
+
+		static struct A
 		{
-			buckets[i] =1;
+			string test = "Test";
 		}
 
-		//writefln("For pageSize=%d there are %d buckets, buckets=%s",pageSize, buckets.length, buckets);
-
+		A t;
+		DbCell cell;
+		cell.from(t);
+		allocator.allocateData2(testTableTootPage, cell.data);
 		writeln("Unittest [DbDataAllocator] passed!");
 	}
 
@@ -625,22 +751,19 @@ struct DbDataAllocator
 struct DbNavigator
 {
 	DbFile* mDbFile;
-	ulong mPageCount;
-	uint mPageSize;
 
 	this(DbFile * dbFile, uint pageSize)
 	{
 		mDbFile = dbFile;
-		mPageSize = pageSize;
 	}
 
 	DbPage aquireDbSlotPage(DbPage rootPage, ulong itemId)
 	{
 
 		uint slotPageNo = 0;
-		uint slotsPerPage = mPageSize / 8;
-		uint lookupIndex = cast(uint)((itemId-1) / slotsPerPage);
 
+		uint slotsPerPage = mDbFile.mPageSize / 8;
+		uint lookupIndex = cast(uint)((itemId-1) / slotsPerPage);
 
 		DbPage finalLookupPage;
 
@@ -655,7 +778,8 @@ struct DbNavigator
 		else
 		{
 			finalLookupPage = aquireFinalLookupPage(rootPage, itemId);
-			slotPageNo = finalLookupPage.loadLookupPointer(lookupIndex);
+
+			slotPageNo = finalLookupPage.readLookupPointer(lookupIndex);
 		}
 
 		return mDbFile.loadPage(slotPageNo);
@@ -663,10 +787,10 @@ struct DbNavigator
 
 	DbPage getDbSlotPage(DbPage rootPage, ulong itemId)
 	{
-		auto slotsPerPage = mPageSize / 8;
+		auto slotsPerPage = mDbFile.mPageSize / 8;
 		uint slotPageIndex = cast(uint)((itemId-1) / slotsPerPage);
 		DbPage finalLookupPointer = aquireFinalLookupPage(rootPage, itemId);
-		auto slotPage = finalLookupPointer.loadLookupPointer(slotPageIndex);
+		auto slotPage = finalLookupPointer.readLookupPointer(slotPageIndex);
 		return mDbFile.loadPage(slotPage);
 	}
 
@@ -689,12 +813,13 @@ struct DbNavigator
 
 	bool isSlotPageAllocNeeded(ulong itemId)
 	{
-		return (itemId % (mPageSize/DbPointer.sizeof) == 1);
+		return (itemId % (mDbFile.mPageSize/DbPointer.sizeof) == 1);
 	}
 
 	bool isLookupPageAllocNeeded(ulong itemId)
 	{
-		uint slotsPerPage = mPageSize / DbPointer.sizeof;
+		uint slotsPerPage = mDbFile.mPageSize / DbPointer.sizeof;
+
 		// TODO Add condition for lookup tree expansion
 		return false;
 	}
@@ -720,13 +845,9 @@ unittest
 	writeln("Unittest [storage.d] start");
 
 	DbPage page = DbPage(PageNo.Master,256);
-	assert (page.mPageSize == 256);
 	assert (page.mRawBytes.length == 256);
 
 	DbHeader dbHeader;
-
-	dbHeader.pageSize = page.mPageSize;
-	dbHeader.changeCounter = 17;
 
 	DbTableHeader tableHeader;
 	tableHeader.itemCount = 0;
@@ -756,5 +877,4 @@ unittest
 
 	assert (result == TestData(111,112,113));
 	writeln("Unittest [storage.d] passed!");
-
 }

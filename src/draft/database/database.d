@@ -17,28 +17,27 @@ struct DataBase
 
 	DbStorage * mStorage;
 
-	// This constructor is probably useful only for testing purpose
-	this(DbStorage * dbStorage, uint pageSize =128)
+	this(string path, uint pageSize =128)
 	{
-		if (!dbStorage)
-		{
-			mStorage = new DbStorage(new DbFile(null, pageSize));
-		}
+		mStorage = new DbStorage(new DbFile(path, pageSize));
 		createStorage();
 	}
 
-	// TODO
-	this(string path)
+	// TODO	
+	// This constructor is probably useful only for testing purpose
+	this(DbStorage * dbStorage)
 	{
+		assert(dbStorage);
 		assert(0);
 	}
 
 	void createStorage()
 	{	
-		//create Master Table
+		//create Master Table (root page only) and initialize heap
 		auto masterTable = Collection!TableInfo(mStorage, PageNo.Null);
 		auto rootPageId =  masterTable.mTableRootPage;
 		assert (rootPageId == 1);
+
 		//insert master table info Item to table
 		masterTable.put(TableInfo("_Internal.MasterTable",rootPageId));
 	}

@@ -1,6 +1,8 @@
 ## About
 
-This is a project of a database engine embedded into the D language. It does't use any other technologies like SQL. It can be seen as a variant of object database. Queries are constructed by D syntax (e.g. using  std.algorithm) mainly via range interface. 
+This is a project of a database engine embedded into the D language. It doesn't use any external libraries and SW. It also doesn't act as an interface/driver to other database engines. 
+
+It can be seen as persistence storage for array of objects. However there are  additional concepts incorporated from database domain. Queries are constructed by D syntax (e.g. using std.algorithm) mainly via range interface. 
 
 ## Status: Proof of concept
 
@@ -9,22 +11,31 @@ For the time being, don't use for other purposes than fun and development
 ## Architecture
 
 The D database engine design is inspired by SQLite database backend. 
-Only some high level concepts are similar. In general, all details differ greatly.
-Because there is no translation to SQL or any other intermediate layer, a query execution is managed directly by user code. 
+Only some concepts are similar. In general implementation of the storage engine is not compatible with SQLite in any way.
+Because there is no translation to SQL or any other intermediate language, a query execution is managed directly by user code (with the exception of index (lookup) handling which is performed by the storage engine). 
 
-![Architecture](arch.png)
+![Architecture](database_arch.png)
 
-## Key features (unfinished)
+The Storage API is meant to be simple for seamless replacement. 
 
-* ACID
-* SQL is not use at any stage
-* fast
-* full compatibility with D algorithms and ranges
-* nothrow @safe @nogc
-* minimal storage size in one file
+## File format
+
+Database storage is based on paging. Its current status is in early stage.
+
+![File format](storage_design.png)
+
+## Key features
+
+* ACID (not implemented yet)
+* Lack of domain specific language (e.g. SQL)
+* Fast (not implemented yet)
+* Full compatibility with D algorithms and ranges
+* Suitable for embedded systems (not implemented yet)
+* Minimal overhead: nothrow @nogc (not implemented yet)
+* Minimal storage size in one file (not implemented yet)
 
 ## Disadvantages
-* Challenging usage of indexes
+* Index usage requires strings and CTFE (e.g. filter!q{item.id <10 && item.group == "AB"})
 * The RPC nature of SQL queries are not possible without additional functionality and currently there are no plans to allow it.
 
 ## Example
@@ -140,8 +151,8 @@ Or (depending on flags)
     * classes
     * structs
     * enumns
-    * scalar type
-    * array
+    * scalar types
+    * arrays
 * direct or via proxy object retrieval patterns
 * accessing members by value or reference
     * member object embedded in the same table or separate
