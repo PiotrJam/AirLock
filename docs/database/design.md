@@ -16,7 +16,7 @@ Because there is no translation to SQL or any other intermediate language, a que
 
 ![Architecture](database_arch.png)
 
-The Storage API is meant to be simple for seamless replacement. 
+The Storage API is meant to be simple for seamless storage backend replacement.
 
 ## File format
 
