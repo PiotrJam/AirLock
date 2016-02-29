@@ -17,7 +17,7 @@ struct DataBase
 
 	DbStorage * mStorage;
 
-	this(string path, uint pageSize =128)
+	this(string path, uint pageSize = minimalPagaSize)
 	{
 		mStorage = new DbStorage(new DbFile(path, pageSize));
 		createStorage();
