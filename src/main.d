@@ -68,11 +68,16 @@ unittest
     strings.copy(collD);
 
     auto data = db.collection!A("SmallIntegers");
-    writeln("Step 1");
-
     assert(data.array == [A(40,1),A(41,2), A(42,3), A(43,4)]);
+
     auto data2 = db.collection!B("Numbers");
     assert(data2.array == numbers);
+    data2.removeItem(B(9_876,5_123_456_789_012,-0.2));
+    data2.put(B(9,9,9));
+    data2.removeItem(B(1,-1,0.2));
+    data2.put(B(1,-2,-3));
+    assert(data2[0] == B(9,9,9));
+    assert(data2.array.length == numbers.length - 1 + 1 - 1 + 1);
 
     auto data3 = db.collection!C("Mixed");
     assert(data3.array == mixed);

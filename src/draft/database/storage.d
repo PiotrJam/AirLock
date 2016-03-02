@@ -549,7 +549,6 @@ struct DbStorage
 
         //Check if the previous data is embedded into DbPointer or not
         if (itemPointer.flags & !DbItemFlags.CellEmbedded)
-
         {
             //TODO
             //check how much space is allocated and reuse if possible
@@ -557,7 +556,6 @@ struct DbStorage
 
         }
 
-        
         if (cell.data.length > (DbPointer.sizeof - DbItemFlags.sizeof))
         {
             // we need a separate storage
@@ -582,9 +580,33 @@ struct DbStorage
     }
 
     
-    void removeItem(T)(ulong pageNo, T item)
+    void removeItem(uint rootPageNo, ulong itemId)
     {
-        assert(0);
+        DbPage rootPage = mDbFile.loadPage(rootPageNo);
+        DbTableHeader dbTableHeader = rootPage.readTableHeader;
+        DbPointer freeDataPtr = dbTableHeader.freeDataPtr;
+
+        DbPage slotPageDel = mNavigator.getDbSlotPage(rootPage, itemId);
+        uint slotIndexDel = cast(uint)((itemId-1) % mDbFile.mPageSize);
+        DbPointer itemPointer = slotPageDel.readSlot(slotIndexDel,DbPointer.sizeof);
+
+        // move released bins to the beggining of the free bins list
+        mDataAllocator.deallocateData(itemPointer, freeDataPtr); 
+
+        // the storage reclaimed from deleted item is in the front of the free bins list 
+        dbTableHeader.freeDataPtr = itemPointer;
+
+        // put the last item in the place of the removed one
+        DbPage slotPageLast = mNavigator.getDbSlotPage(rootPage, dbTableHeader.itemCount);
+        uint slotIndexLast = cast(uint)((dbTableHeader.itemCount-1) % mDbFile.mPageSize);
+        DbPointer lastItemPointer = slotPageLast.readSlot(slotIndexLast, DbPointer.sizeof);
+        slotPageDel.writeSlot(slotIndexDel, lastItemPointer);
+        mDbFile.writePage(slotPageDel.mPageNo, slotPageDel.mRawBytes);
+
+        // Update item count and save root page along with the table header
+        --dbTableHeader.itemCount;
+        rootPage.writeTableHeader(dbTableHeader);
+        mDbFile.writePage(rootPage.mPageNo, rootPage.mRawBytes);
     }
 
     void dropTable(ulong pageNo)
@@ -627,6 +649,13 @@ struct DbDataAllocator
         return result;
     }
 
+    void deallocateData(DbPointer dataPtr, DbPointer freeDataPtr)
+    {
+        DbPage dataPage = mDbFile.loadPage(dataPtr.pageNo);
+        ubyte[] bytes = cast(ubyte[])(cast(void*)&freeDataPtr.rawData)[0..DbPointer.sizeof];
+        dataPage.writeBytes(dataPtr.offset, bytes);
+    }
+
     DbPointer makeNewHeapPage(int binSize)
     {
         uint pageNo = mDbFile.reserveFreePage();
@@ -638,7 +667,7 @@ struct DbDataAllocator
             DbPointer binPointer;
 
             uint pointerOffset = offset+ binSize;
-            if ( pointerOffset <= (mDbFile.mPageSize -32))
+            if ( pointerOffset <= (mDbFile.mPageSize -binSize))
             {
                 binPointer.offset = pointerOffset;
                 binPointer.pageNo = pageNo;
