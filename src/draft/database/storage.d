@@ -11,15 +11,15 @@ import std.stdio;
 
 enum magicString = "DLDb";
 enum minimalPagaSize = 128;
-
+enum tempBinSize = 32;
 
 immutable dbAllocResolution = 4; //in bytes
 
 enum PageNo: uint 		 { Null = 0, Master = 1 }
 
-enum DbItemFlags: ubyte  { CellEmbedded = 2<<0, Compressed = 2<<1, Fragmented = 2<<2 }
+enum DbItemFlags: ubyte  { CellEmbedded = 1<<0, Compressed = 1<<1, Fragmented = 1<<2 }
 
-enum DbTableFlags: ubyte { FixedSizeItem = 2<<0, MetaInfoEmbedded = 2<<1 }
+enum DbTableFlags: ubyte { FixedSizeItem = 1<<0, MetaInfoEmbedded = 1<<1 }
 
 enum DbType: ubyte	   	 { Char, Wchar, Dchar, 
                            Ubyte, Byte, Ushort, Short, Uint, Int, Ulong, Long, 
@@ -32,7 +32,6 @@ struct TableInfo
     uint pageNo;
     DbType[] typeInfoArray;
 }
-
 
 struct DbAllocationResults
 {
@@ -75,13 +74,13 @@ struct DbPointer
     uint offset()
     {
         // get higher 4 bytes with cleared flag byte
-        return cast(uint)(rawData >> 32) & 0x00FF_FFFF ;
+        return cast(uint)(rawData >> tempBinSize) & 0x00FF_FFFF ;
     }
     
     void offset(uint offset)
     {
         rawData = rawData & 0xFF00_0000_FFFF_FFFF;
-        rawData = rawData | (cast(ulong)offset << 32);
+        rawData = rawData | (cast(ulong)offset << tempBinSize);
     }
     
     uint pageNo()
@@ -117,6 +116,7 @@ struct DbPointer
     }
     
 }
+
 struct DbPage
 {
     uint mTableHeaderOffset = 0;
@@ -163,17 +163,6 @@ struct DbPage
         uint offset = index * cast(uint)DbPointer.sizeof;
         DbPointer pointer = DbPointer(*cast(ulong*)(cast(void*)(&mRawBytes[offset])));
         return pointer;
-    }
-
-    void writeCell(uint offset, ubyte[] data)
-    {
-        mRawBytes[offset..offset + data.length] = data;
-    }
-
-    DbCell readCell(uint offset)
-    {
-        DbCell cell = DbCell(mRawBytes[offset..$]);
-        return cell;
     }
 
     void writeLookupPointer(uint index, uint pointer)
@@ -280,8 +269,7 @@ struct DbCell
     T to (T)()
     {
         T item;
-
-        data.reserve = 256;
+        assert(data, "Invalid cell data");
         static if(is(T == struct))
         {
             foreach(idx, memberType; FieldTypeTuple!(T))
@@ -379,9 +367,6 @@ struct DbCell
     }
 }
 
-
-
-
 struct DbFile
 {
     string mPath;
@@ -424,7 +409,6 @@ struct DbFile
             loadPage(i).dump;
         }
     }
-
 }
 
 struct DbStorage
@@ -440,18 +424,25 @@ struct DbStorage
         mDataAllocator = DbDataAllocator(dbFile);
     }
 
-    uint createTable(uint pageNo)
+    uint initializeStorage()
     {
-        assert(pageNo == PageNo.Null);
+        uint pageNo = mDbFile.reserveFreePage;
 
-        pageNo = mDbFile.reserveFreePage;
-
+        assert (pageNo == PageNo.Master);
         DbPage page = mDbFile.loadPage(pageNo);
-        if(pageNo == PageNo.Master) // this means we have to initialize all db info
-        {
-            DbHeader dbHeader;
-            page.writeDbHeader(dbHeader);
-        }
+        DbHeader dbHeader;
+        page.writeDbHeader(dbHeader);
+
+        page.writeTableHeader(DbTableHeader());
+        mDbFile.writePage(pageNo, page.mRawBytes);
+        return pageNo;
+    }
+
+    uint createTable()
+    {
+        uint pageNo = mDbFile.reserveFreePage;
+        assert(pageNo != PageNo.Null);
+        DbPage page = mDbFile.loadPage(pageNo);
         page.writeTableHeader(DbTableHeader());
         mDbFile.writePage(pageNo, page.mRawBytes);
         return pageNo;
@@ -524,8 +515,7 @@ struct DbStorage
         }
         else
         {
-            DbPage dataPage = mDbFile.loadPage(pointer.pageNo);
-            cell = dataPage.readCell(pointer.offset);
+            cell = DbCell(mDataAllocator.readCellData(pointer,tempBinSize));
         }
         return cell.to!T;
     }
@@ -579,7 +569,6 @@ struct DbStorage
         mDbFile.writePage(tableRootPage, rootPage.mRawBytes);
     }
 
-    
     void removeItem(uint rootPageNo, ulong itemId)
     {
         DbPage rootPage = mDbFile.loadPage(rootPageNo);
@@ -613,6 +602,32 @@ struct DbStorage
     {
         assert(0);
     }
+
+    unittest
+    {
+        static struct C
+        {
+            int a;
+            string name;
+        }
+
+        writeln("Unittest [DbStorage] start");
+
+        DbStorage storage = DbStorage(new DbFile("",256));
+
+        uint masterTablePageNo = storage.initializeStorage();
+
+        uint regularTable = storage.createTable();
+
+        auto bigItem = C(5, "123456789 123456789 123456789 123456789 123456789 " //50
+                            "123456789 123456789 123456789 123456789 1234567890"); //100
+        storage.addItem(regularTable,bigItem); 
+
+        assert(storage.fetchDbItem!C(regularTable, 1) == bigItem);
+
+        writeln("Unittest [DbStorage] passed!");
+    }
+
 }
 struct DbDataAllocator
 {
@@ -629,18 +644,19 @@ struct DbDataAllocator
         }
     }
 
-    DbAllocationResults allocateData(DbPointer freeDataPtr, ubyte[] cellData)
+    DbAllocationResults allocateData(DbPointer freeDataPtr, ubyte[] cellData, int binSize = tempBinSize)
     {
+        assert(cellData.length > 0);
 
         if (freeDataPtr.pageNo == PageNo.Null)
         {
-            freeDataPtr = makeNewHeapPage(64);
+            freeDataPtr = makeNewHeapPage(binSize);
         }
 
-        DbPointer nextFreeSpacePtr = writeCellData(freeDataPtr, cellData, 64);
+        DbPointer nextFreeSpacePtr = writeCellData(freeDataPtr, cellData, binSize);
         if (nextFreeSpacePtr.pageNo == PageNo.Null)
         {
-            nextFreeSpacePtr = makeNewHeapPage(64);
+            nextFreeSpacePtr = makeNewHeapPage(binSize);
         }
 
         DbAllocationResults result;
@@ -681,21 +697,121 @@ struct DbDataAllocator
 
     DbPointer writeCellData(DbPointer heapDataPtr, ubyte[] data, uint binSize)
     {
-        assert(data.length <= binSize, "More data than bin not supported yet!");
         DbPage currHeapPage = mDbFile.loadPage(heapDataPtr.pageNo);
-        ubyte[] bytes = currHeapPage.readBytes(heapDataPtr.offset, binSize);
-        DbPointer nextFreePtr = DbPointer( *cast(ulong*)cast(void*)bytes.ptr);
+        ubyte[] nextFreePtrBytes = currHeapPage.readBytes(heapDataPtr.offset, DbPointer.sizeof);
+        DbPointer nextFreePtr = DbPointer( *cast(ulong*)cast(void*)nextFreePtrBytes.ptr);
+        // TODO Expand to 2^64 available size. Currently 256
+        ubyte[] cellLengthBytes = [cast(ubyte)data.length];
+        assert(data.length < 256);
+        const ulong bytesToWrite = data.length + cellLengthBytes.length;
+        long leftDataBytes = bytesToWrite;
 
-        bool saved = false;
-
-        currHeapPage.writeBytes(heapDataPtr.offset, data);
-        mDbFile.writePage(heapDataPtr.pageNo, currHeapPage.mRawBytes);
-        while(!saved)
+        if (bytesToWrite + DbPointer.sizeof <= binSize)
         {
-            saved = true;
+            currHeapPage.writeBytes(heapDataPtr.offset+ cast(uint)DbPointer.sizeof, cellLengthBytes);
+            currHeapPage.writeBytes(heapDataPtr.offset+ cast(uint)DbPointer.sizeof + cast(uint)cellLengthBytes.length, data);
+            mDbFile.writePage(currHeapPage.mPageNo, currHeapPage.mRawBytes);
+        }
+        else
+        {
+            //data needs to be fragmented. It's bigger than binSize.
+            size_t dataOffset = 0;
+            // if data length is bigger than binSize then dataOffsetEnd is inside data array
+            size_t dataSegmentSize = binSize - DbPointer.sizeof - cellLengthBytes.length;
+
+            assert (dataSegmentSize <= bytesToWrite, "dataSegmentSize to large");
+
+
+            // store cell size
+            currHeapPage.writeBytes(heapDataPtr.offset+cast(uint)DbPointer.sizeof,cellLengthBytes);
+            heapDataPtr.offset = cast(uint)(heapDataPtr.offset+ cellLengthBytes.length);
+            leftDataBytes -= cellLengthBytes.length;
+            while(true)
+            {
+                // actual data is written after the pointer and in the case of the first segment, also cell size
+                ubyte[] dataPortion = data[dataOffset..dataOffset+dataSegmentSize];
+                currHeapPage.writeBytes(heapDataPtr.offset+cast(uint)DbPointer.sizeof, dataPortion);
+
+                mDbFile.writePage(heapDataPtr.pageNo, currHeapPage.mRawBytes);
+
+                dataOffset += dataSegmentSize;
+
+                //  dataSegmentSize should be always adapted to the actual data length
+                leftDataBytes -= dataSegmentSize;
+                dataSegmentSize = (leftDataBytes<=binSize) ? leftDataBytes : binSize - DbPointer.sizeof;
+
+                assert(nextFreePtr.pageNo != PageNo.Null, "No more free space");
+                // follow free list
+                heapDataPtr = nextFreePtr;
+                currHeapPage = mDbFile.loadPage(nextFreePtr.pageNo);
+
+                nextFreePtrBytes = currHeapPage.readBytes(nextFreePtr.offset, DbPointer.sizeof);
+                nextFreePtr = DbPointer( *cast(ulong*)cast(void*)nextFreePtrBytes.ptr);
+
+                if (leftDataBytes <= binSize)
+                {
+                    //write the last portion
+                    dataPortion = data[dataOffset..dataOffset+dataSegmentSize];
+                    currHeapPage.writeBytes(heapDataPtr.offset, dataPortion);
+                    mDbFile.writePage(currHeapPage.mPageNo, currHeapPage.mRawBytes);
+                    break;
+                }
+            }
         }
 
+        if(nextFreePtr.pageNo == PageNo.Null)
+        {
+            nextFreePtr = makeNewHeapPage(binSize);
+        }
+        assert(nextFreePtr.rawData, "No free bin available");
         return nextFreePtr;
+    }
+
+    ubyte[] readCellData(DbPointer dataPtr, uint binSize)
+    {
+        ubyte[] cellData;
+        DbPage dataPage = mDbFile.loadPage(dataPtr.pageNo);
+        // TODO expand to 2^64
+        ubyte[] lenghtBytes = dataPage.readBytes(dataPtr.offset + cast(uint)DbPointer.sizeof, 1);
+        const ulong bytesToRead = lenghtBytes[0];
+        ulong dataLeft = bytesToRead;
+        cellData.length = bytesToRead;
+        if ( (bytesToRead + DbPointer.sizeof + lenghtBytes.length) <= binSize)
+        {
+            cellData = dataPage.readBytes(dataPtr.offset+ cast(uint)DbPointer.sizeof + cast(uint)lenghtBytes.length, bytesToRead);
+        }
+        else
+        {
+            ubyte[] nextDataPtrBytes = dataPage.readBytes(dataPtr.offset, DbPointer.sizeof);
+
+            DbPointer nextPtr = DbPointer( *cast(ulong*)cast(void*)nextDataPtrBytes.ptr);
+            size_t dataOffset = 0;
+            // if data length is bigger than binSize then dataOffsetEnd should be inside data array
+            size_t dataSegmentSize = binSize - DbPointer.sizeof - lenghtBytes.length;
+            dataPtr.offset = cast(uint)(dataPtr.offset + lenghtBytes.length);
+            while(true)
+            {
+                cellData[dataOffset..dataOffset+dataSegmentSize] = dataPage.readBytes(dataPtr.offset+cast(uint)DbPointer.sizeof, cast(uint)dataSegmentSize);
+                dataOffset += dataSegmentSize;
+                dataLeft -= dataSegmentSize;
+
+                dataPtr = nextPtr;
+
+                nextDataPtrBytes = dataPage.readBytes(dataPtr.offset, DbPointer.sizeof);
+                nextPtr = DbPointer( *cast(ulong*)cast(void*)nextDataPtrBytes.ptr);
+
+                if (dataLeft < binSize)
+                {
+                    dataPage = mDbFile.loadPage(dataPtr.pageNo);
+                    cellData[dataOffset..dataOffset+dataLeft] = dataPage.readBytes(dataPtr.offset, cast(uint)dataLeft);
+                    break;
+                }
+                dataSegmentSize = binSize - DbPointer.sizeof;
+            }
+
+        }
+
+        return cellData;
     }
 
     int bitmapSize()
@@ -712,7 +828,7 @@ struct DbDataAllocator
         uint testTableTootPage = 1;
         DbDataAllocator allocator = DbDataAllocator(new DbFile("",pageSize));
 
-        auto res = allocator.makeNewHeapPage(32);
+        auto res = allocator.makeNewHeapPage(tempBinSize);
 
         
         static struct A
@@ -726,7 +842,6 @@ struct DbDataAllocator
         allocator.allocateData(DbPointer(0), cell.data);
         writeln("Unittest [DbDataAllocator] passed!");
     }
-
 }
 
 struct DbNavigator
@@ -809,53 +924,7 @@ struct DbNavigator
     {
         writeln("Unittest [DbNavigator] start");
         DbNavigator navigator;
+
         writeln("Unittest [DbNavigator] passed!");
     }
-
-}
-
-unittest
-{
-    static struct TestData
-    {
-        int a;
-        int b;
-        int c;
-    }
-
-    writeln("Unittest [storage.d] start");
-
-    DbPage page = DbPage(PageNo.Master,256);
-    assert (page.mRawBytes.length == 256);
-
-    DbHeader dbHeader;
-
-    DbTableHeader tableHeader;
-    tableHeader.itemCount = 0;
-
-    page.writeDbHeader(dbHeader);
-    page.writeTableHeader(tableHeader);
-
-    TestData testData= TestData(11,12,13);
-    DbCell cell;
-    cell.from(testData);
-    auto freeSpaceOffset = cast(uint)(page.mTableHeaderOffset+DbTableHeader.sizeof + tableHeader.itemCount * TestData.sizeof);
-    page.writeCell(freeSpaceOffset, cast(ubyte[])cell.data);
-    tableHeader.itemCount = 1;
-    page.writeTableHeader(tableHeader);
-    TestData testData2= TestData(111,112,113);
-    DbCell cell2;
-    cell2.from(testData2);
-    freeSpaceOffset = cast(uint)(page.mTableHeaderOffset+DbTableHeader.sizeof + tableHeader.itemCount * TestData.sizeof);
-    page.writeCell(freeSpaceOffset, cast(ubyte[])cell2.data);
-
-    DbPage page2 = DbPage(PageNo.Master,256);
-    page2.mRawBytes = page.mRawBytes;
-    uint offset = cast(uint)(page.mTableHeaderOffset+DbTableHeader.sizeof + tableHeader.itemCount * TestData.sizeof);
-    DbCell cell3 = page2.readCell(offset);
-
-    TestData result = cell3.to!TestData();
-
-    assert (result == TestData(111,112,113));
-    writeln("Unittest [storage.d] passed!");
 }

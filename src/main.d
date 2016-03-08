@@ -18,7 +18,7 @@ void main(string[] args)
 
 unittest
 {
-    writeln("Unittest [main] 1 start");
+    writeln("Unittest [main] Test 1 start");
 
     static struct A
     {
@@ -83,16 +83,15 @@ unittest
     assert(data3.array == mixed);
 
     auto data4 = db.collection!D("Strings").filter!(s => (s.country == "Poland" || s.city.canFind("dap")));
-
     assert(data4.array == [D("Poznan","Poland"), D("Budapest","Hungary"), D("Warsaw","Poland")]);
 
-    writeln("Unittest [main] 1 passed!");
+    writeln("Unittest [main] Test 1 passed!");
 
 }
 
 unittest
 {
-    writeln("Test 2 start");
+    writeln("Unittest [main] Test 2 start");
     static struct A
     {
         string a;
@@ -113,12 +112,12 @@ unittest
     }
     assert(collectionA.array == [A("James",[1,2,3]), A("Hero 2 <updated>", [3]), A("R2D2 <updated>",[3])]);
 
-    writeln("Test 2 passed!");
+    writeln("Unittest [main] Test 2 passed!");
 }
 
 unittest
 {
-    writeln("Test 3 start");
+    writeln("Unittest [main] Test 3 start");
     static struct A
     {
         string a;
@@ -140,7 +139,7 @@ unittest
 
     collectionA.update(A("1002",[3,4,5,6], 2), A("Boooom",[3,4,5,6], 2));
 
-    writeln("Test 3 passed!");
+    writeln("Unittest [main] Test 3 passed!");
 }
 
 /*
