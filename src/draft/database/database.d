@@ -12,23 +12,23 @@ import std.algorithm;
 import std.array;
 
 
+
+
 struct DataBase
 {
 
     DbStorage * mStorage;
 
-    this(string path, uint pageSize = minimalPagaSize)
+    this(string path, DbParams params)
     {
-        mStorage = new DbStorage(new DbFile(path, pageSize));
+        mStorage = new DbStorage(path, params.pageSize);
         createStorage();
     }
 
-    // TODO	
-    // This constructor is probably useful only for testing purpose
-    this(DbStorage * dbStorage)
+
+    this(string path)
     {
-        assert(dbStorage);
-        assert(0);
+        mStorage = new DbStorage(path);
     }
 
     void createStorage()

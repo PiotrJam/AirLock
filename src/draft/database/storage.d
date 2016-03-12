@@ -8,6 +8,7 @@ module draft.database.storage;
 
 import std.traits;
 import std.stdio;
+import std.file;
 
 enum magicString = "DLDb";
 enum minimalPagaSize = 128;
@@ -25,6 +26,12 @@ enum DbType: ubyte	   	 { Char, Wchar, Dchar,
                            Ubyte, Byte, Ushort, Short, Uint, Int, Ulong, Long, 
                           Float, Double, 
                           Array, StructStart, StructEnd, DbReferece }
+
+
+struct DbParams
+{
+    uint pageSize = minimalPagaSize;
+}
 
 struct TableInfo
 {
@@ -369,18 +376,58 @@ struct DbCell
 
 struct DbFile
 {
-    string mPath;
+    File mFile;
     uint mPageSize;
     uint mPageCount;
     ubyte[] mBuffer;
-    uint[] freePageIds = [];
-    
+
     this(string path, uint pageSize)
     {
-        mPath = path;
+        if (path != "")
+        {
+            import std.file;
+            if(exists(path))
+            {
+                mFile = File(path, "w");
+            }
+            else
+            {
+                assert(0);
+            }
+        }
         mPageSize = pageSize;
     }
-    
+
+    this(string path)
+    {
+        if (path != "")
+        {
+            if(exists(path))
+            {
+                assert(0);
+            }
+            else
+            {
+                mFile = File(path, "r");
+                mBuffer.length = mFile.size;
+                mBuffer = mFile.rawRead(mBuffer);
+            }
+        }
+
+        // TODO read page size from the dbfile
+        uint pageSize = -1;
+        mPageSize = pageSize;
+    }
+
+    ~this()
+    {
+        if(mFile.isOpen)
+        {
+            mFile.open(mFile.name, "w");
+            mFile.rawWrite(mBuffer);
+        }
+    }
+
     DbPage loadPage(uint pageNo)
     {
         DbPage page = DbPage(pageNo, mPageSize);
@@ -388,17 +435,17 @@ struct DbFile
         return page;
     }
 
-    void writePage(uint pageNo, ubyte[] pageData)
+    void storePage(uint pageNo, ubyte[] pageData)
     {
         mBuffer[cast(size_t)(pageNo-1)*mPageSize..cast(size_t)pageNo*mPageSize] = pageData;
     }
 
-    uint reserveFreePage(uint count = 1)
+    uint appendPages(uint count)
     {
-
         mBuffer.length += mPageSize*count;
         uint result = cast(uint)mBuffer.length / mPageSize;
         mPageCount += count;
+
         return result;
     }
 
@@ -409,24 +456,49 @@ struct DbFile
             loadPage(i).dump;
         }
     }
+
+    unittest
+    {
+        import std.file;
+        writeln("Unittest [DbFile] start");
+        writeln("getcwd=", getcwd);
+        auto dbFile = DbFile("/home/piotrek/dev/database/test.db", 128);
+
+        ubyte[128] data = 'a'; 
+        dbFile.appendPages(1);
+        dbFile.storePage(1,data);
+
+        writeln("Unittest [DbFile] passed!");
+    }
+
 }
 
 struct DbStorage
 {
-    DbFile * mDbFile;
+    DbFile mDbFile;
     DbNavigator mNavigator;
     DbDataAllocator mDataAllocator;
+    DbPageAllocator mPageAllocator;
 
-    this(DbFile * dbFile)
+    this(string path, uint pageSize)
     {
-        mDbFile = dbFile;
-        mNavigator = DbNavigator(dbFile, mDbFile.mPageSize);
-        mDataAllocator = DbDataAllocator(dbFile);
+        mDbFile = DbFile(path,pageSize);
+        mPageAllocator = DbPageAllocator(&mDbFile);
+        mNavigator = DbNavigator(&mDbFile, &mPageAllocator);
+        mDataAllocator = DbDataAllocator(&mDbFile, &mPageAllocator);
+    }
+
+    this(string path)
+    {
+        mDbFile = DbFile(path);
+        mPageAllocator = DbPageAllocator(&mDbFile);
+        mNavigator = DbNavigator(&mDbFile, &mPageAllocator);
+        mDataAllocator = DbDataAllocator(&mDbFile, &mPageAllocator);
     }
 
     uint initializeStorage()
     {
-        uint pageNo = mDbFile.reserveFreePage;
+        uint pageNo = mPageAllocator.reserveFreePage;
 
         assert (pageNo == PageNo.Master);
         DbPage page = mDbFile.loadPage(pageNo);
@@ -434,17 +506,17 @@ struct DbStorage
         page.writeDbHeader(dbHeader);
 
         page.writeTableHeader(DbTableHeader());
-        mDbFile.writePage(pageNo, page.mRawBytes);
+        mDbFile.storePage(pageNo, page.mRawBytes);
         return pageNo;
     }
 
     uint createTable()
     {
-        uint pageNo = mDbFile.reserveFreePage;
+        uint pageNo = mPageAllocator.reserveFreePage;
         assert(pageNo != PageNo.Null);
         DbPage page = mDbFile.loadPage(pageNo);
         page.writeTableHeader(DbTableHeader());
-        mDbFile.writePage(pageNo, page.mRawBytes);
+        mDbFile.storePage(pageNo, page.mRawBytes);
         return pageNo;
     }
 
@@ -485,8 +557,8 @@ struct DbStorage
         //update table header
         tableHeader.itemCount++;
         tableRootPage.writeTableHeader(tableHeader);
-        mDbFile.writePage(slotPage.mPageNo, slotPage.mRawBytes);
-        mDbFile.writePage(pageNo, tableRootPage.mRawBytes);
+        mDbFile.storePage(slotPage.mPageNo, slotPage.mRawBytes);
+        mDbFile.storePage(pageNo, tableRootPage.mRawBytes);
     }
 
     ulong getNextDbItemId(uint pageNo, ulong id)
@@ -565,8 +637,8 @@ struct DbStorage
         }
 
         rootPage.writeTableHeader(tableHeader);
-        mDbFile.writePage(slotPage.mPageNo, slotPage.mRawBytes);
-        mDbFile.writePage(tableRootPage, rootPage.mRawBytes);
+        mDbFile.storePage(slotPage.mPageNo, slotPage.mRawBytes);
+        mDbFile.storePage(tableRootPage, rootPage.mRawBytes);
     }
 
     void removeItem(uint rootPageNo, ulong itemId)
@@ -590,12 +662,12 @@ struct DbStorage
         uint slotIndexLast = cast(uint)((dbTableHeader.itemCount-1) % mDbFile.mPageSize);
         DbPointer lastItemPointer = slotPageLast.readSlot(slotIndexLast, DbPointer.sizeof);
         slotPageDel.writeSlot(slotIndexDel, lastItemPointer);
-        mDbFile.writePage(slotPageDel.mPageNo, slotPageDel.mRawBytes);
+        mDbFile.storePage(slotPageDel.mPageNo, slotPageDel.mRawBytes);
 
         // Update item count and save root page along with the table header
         --dbTableHeader.itemCount;
         rootPage.writeTableHeader(dbTableHeader);
-        mDbFile.writePage(rootPage.mPageNo, rootPage.mRawBytes);
+        mDbFile.storePage(rootPage.mPageNo, rootPage.mRawBytes);
     }
 
     void dropTable(ulong pageNo)
@@ -605,15 +677,15 @@ struct DbStorage
 
     unittest
     {
+        writeln("Unittest [DbStorage] start");
+
         static struct C
         {
             int a;
             string name;
         }
 
-        writeln("Unittest [DbStorage] start");
-
-        DbStorage storage = DbStorage(new DbFile("",256));
+        DbStorage storage = DbStorage("",256);
 
         uint masterTablePageNo = storage.initializeStorage();
 
@@ -629,20 +701,22 @@ struct DbStorage
     }
 
 }
+
+struct DbPageAllocator
+{
+    DbFile* mDbFile;
+
+    uint reserveFreePage(uint count = 1)
+    {
+        return mDbFile.appendPages(1);
+    }
+
+}
+
 struct DbDataAllocator
 {
-    DbFile * mDbFile;
-
-    this(DbFile * dbFile)
-    {
-        assert(dbFile);
-        mDbFile = dbFile;
-        if (mDbFile.mPageCount > 0)
-        {
-            DbPage masterPage = mDbFile.loadPage(PageNo.Master);
-            DbHeader header = masterPage.readDbHeader;
-        }
-    }
+    DbFile *mDbFile;
+    DbPageAllocator *mPageAllocator;
 
     DbAllocationResults allocateData(DbPointer freeDataPtr, ubyte[] cellData, int binSize = tempBinSize)
     {
@@ -674,7 +748,7 @@ struct DbDataAllocator
 
     DbPointer makeNewHeapPage(int binSize)
     {
-        uint pageNo = mDbFile.reserveFreePage();
+        uint pageNo = mPageAllocator.reserveFreePage();
         DbPointer beginPointer;
         beginPointer.pageNo = pageNo;
         DbPage newHeapPage = mDbFile.loadPage(pageNo);
@@ -691,7 +765,7 @@ struct DbDataAllocator
 
             newHeapPage.writeBytes(offset, cast(ubyte[])(cast(void*)&binPointer.rawData)[0..DbPointer.sizeof]);
         }
-        mDbFile.writePage(newHeapPage.mPageNo, newHeapPage.mRawBytes);
+        mDbFile.storePage(newHeapPage.mPageNo, newHeapPage.mRawBytes);
         return beginPointer;
     }
 
@@ -710,7 +784,7 @@ struct DbDataAllocator
         {
             currHeapPage.writeBytes(heapDataPtr.offset+ cast(uint)DbPointer.sizeof, cellLengthBytes);
             currHeapPage.writeBytes(heapDataPtr.offset+ cast(uint)DbPointer.sizeof + cast(uint)cellLengthBytes.length, data);
-            mDbFile.writePage(currHeapPage.mPageNo, currHeapPage.mRawBytes);
+            mDbFile.storePage(currHeapPage.mPageNo, currHeapPage.mRawBytes);
         }
         else
         {
@@ -732,7 +806,7 @@ struct DbDataAllocator
                 ubyte[] dataPortion = data[dataOffset..dataOffset+dataSegmentSize];
                 currHeapPage.writeBytes(heapDataPtr.offset+cast(uint)DbPointer.sizeof, dataPortion);
 
-                mDbFile.writePage(heapDataPtr.pageNo, currHeapPage.mRawBytes);
+                mDbFile.storePage(heapDataPtr.pageNo, currHeapPage.mRawBytes);
 
                 dataOffset += dataSegmentSize;
 
@@ -753,7 +827,7 @@ struct DbDataAllocator
                     //write the last portion
                     dataPortion = data[dataOffset..dataOffset+dataSegmentSize];
                     currHeapPage.writeBytes(heapDataPtr.offset, dataPortion);
-                    mDbFile.writePage(currHeapPage.mPageNo, currHeapPage.mRawBytes);
+                    mDbFile.storePage(currHeapPage.mPageNo, currHeapPage.mRawBytes);
                     break;
                 }
             }
@@ -826,7 +900,9 @@ struct DbDataAllocator
 
         uint pageSize = 512;
         uint testTableTootPage = 1;
-        DbDataAllocator allocator = DbDataAllocator(new DbFile("",pageSize));
+        auto dbFile = new DbFile("",pageSize);
+        auto pageAlloc = new  DbPageAllocator(dbFile);
+        DbDataAllocator allocator = DbDataAllocator(dbFile, pageAlloc);
 
         auto res = allocator.makeNewHeapPage(tempBinSize);
 
@@ -847,11 +923,8 @@ struct DbDataAllocator
 struct DbNavigator
 {
     DbFile* mDbFile;
+    DbPageAllocator* mPageAllocator;
 
-    this(DbFile * dbFile, uint pageSize)
-    {
-        mDbFile = dbFile;
-    }
 
     DbPage aquireDbSlotPage(DbPage rootPage, ulong itemId)
     {
@@ -866,7 +939,7 @@ struct DbNavigator
         //Firstly check if a new slot page is needed.
         if( isSlotPageAllocNeeded(itemId) )
         {
-            slotPageNo = mDbFile.reserveFreePage();
+            slotPageNo = mPageAllocator.reserveFreePage();
             finalLookupPage = aquireFinalLookupPage(rootPage, itemId);
             finalLookupPage.writeLookupPointer(lookupIndex,slotPageNo);
 
