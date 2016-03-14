@@ -461,12 +461,13 @@ struct DbFile
     {
         import std.file;
         writeln("Unittest [DbFile] start");
-        writeln("getcwd=", getcwd);
-        auto dbFile = DbFile("/home/piotrek/dev/database/test.db", 128);
 
-        ubyte[128] data = 'a'; 
-        dbFile.appendPages(1);
-        dbFile.storePage(1,data);
+        // TODO change to appropiate fs handing
+        // auto dbFile = DbFile("test.db", 128);
+
+        // ubyte[128] data = 'a'; 
+        // dbFile.appendPages(1);
+        // dbFile.storePage(1,data);
 
         writeln("Unittest [DbFile] passed!");
     }
