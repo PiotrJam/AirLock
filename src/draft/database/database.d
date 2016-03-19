@@ -11,24 +11,17 @@ import draft.database.storage;
 import std.algorithm;
 import std.array;
 
-
-
-
 struct DataBase
 {
-
-    DbStorage * mStorage;
-
+   
     this(string path, DbParams params)
     {
-        mStorage = new DbStorage(path, params.pageSize);
-        createStorage();
+        mStorage = new DbStorage(path, params);
     }
 
-
-    this(string path)
+    this(DbStorage* storage)
     {
-        mStorage = new DbStorage(path);
+        mStorage = storage;
     }
 
     void createStorage()
@@ -36,11 +29,21 @@ struct DataBase
         //create Master Table (root page only)
         auto masterTable = Collection!TableInfo(mStorage, PageNo.Null);
         masterTable.createColletion(PageNo.Master);
-        auto rootPageId =  masterTable.mTableRootPage;
+        // For now rootPageId and collectionId is the same value
+        auto rootPageId =  masterTable.collectionId;
         assert (rootPageId == PageNo.Master);
 
         //insert master table info Item to table
         masterTable.put(TableInfo("_Internal.MasterTable",rootPageId));
+    }
+
+    static DataBase create(string path, DbParams params = DbParams())
+    {
+        auto storage = DbStorage.create(path, params);
+        DataBase db = DataBase(storage);
+        db.createStorage();
+
+        return db;
     }
 
     Collection!T createCollection(T)(string name)
@@ -90,4 +93,8 @@ struct DataBase
         return masterTable.map!(item => item.name).array;
     }
 
+private:
+    DbStorage* mStorage;
+
 }
+

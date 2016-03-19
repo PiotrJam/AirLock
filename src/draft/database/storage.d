@@ -27,10 +27,12 @@ enum DbType: ubyte	   	 { Char, Wchar, Dchar,
                           Float, Double, 
                           Array, StructStart, StructEnd, DbReferece }
 
+enum DbFlags: uint      { InMemory = 1}
 
 struct DbParams
 {
     uint pageSize = minimalPagaSize;
+    uint flags;
 }
 
 struct TableInfo
@@ -376,77 +378,84 @@ struct DbCell
 
 struct DbFile
 {
-    File mFile;
+    string mFilePath;
+    ubyte[] mBuffer;
     uint mPageSize;
     uint mPageCount;
-    ubyte[] mBuffer;
+    uint mFlags;
 
-    this(string path, uint pageSize)
+    this(string path, DbParams params)
     {
-        if (path != "")
-        {
-            import std.file;
-            if(exists(path))
-            {
-                mFile = File(path, "w");
-            }
-            else
-            {
-                assert(0);
-            }
-        }
-        mPageSize = pageSize;
-    }
-
-    this(string path)
-    {
-        if (path != "")
-        {
-            if(exists(path))
-            {
-                assert(0);
-            }
-            else
-            {
-                mFile = File(path, "r");
-                mBuffer.length = mFile.size;
-                mBuffer = mFile.rawRead(mBuffer);
-            }
-        }
-
-        // TODO read page size from the dbfile
-        uint pageSize = -1;
-        mPageSize = pageSize;
-    }
-
-    ~this()
-    {
-        if(mFile.isOpen)
-        {
-            mFile.open(mFile.name, "w");
-            mFile.rawWrite(mBuffer);
-        }
+        mPageSize = params.pageSize;
+        mFlags  = params.flags;
+        mFilePath = path;
     }
 
     DbPage loadPage(uint pageNo)
     {
         DbPage page = DbPage(pageNo, mPageSize);
-        page.mRawBytes = mBuffer[cast(size_t)(pageNo-1) * mPageSize .. cast(size_t)pageNo * mPageSize].dup;
+
+        if(mFlags & DbFlags.InMemory)
+        {
+            page.mRawBytes = mBuffer[cast(size_t)(pageNo-1) * mPageSize .. cast(size_t)pageNo * mPageSize].dup;
+        }
+        else
+        {
+            auto file = File(mFilePath);
+            file.seek( (pageNo-1) * mPageSize);
+            file.rawRead(page.mRawBytes);
+        }
         return page;
     }
 
     void storePage(uint pageNo, ubyte[] pageData)
     {
-        mBuffer[cast(size_t)(pageNo-1)*mPageSize..cast(size_t)pageNo*mPageSize] = pageData;
+        if(mFlags & DbFlags.InMemory)
+        {
+            mBuffer[cast(size_t)(pageNo-1)*mPageSize..cast(size_t)pageNo*mPageSize] = pageData;
+        }
+        else
+        {
+            ulong offset = (pageNo-1) * mPageSize;
+            assert (pageNo <= mPageCount, "Writing page over file size"); 
+            auto file = File(mFilePath, "r+");
+            file.seek( (pageNo-1) * mPageSize);
+            file.rawWrite(pageData);
+        }
     }
 
     uint appendPages(uint count)
     {
-        mBuffer.length += mPageSize*count;
-        uint result = cast(uint)mBuffer.length / mPageSize;
         mPageCount += count;
+        if(mFlags & DbFlags.InMemory)
+        {
+            mBuffer.length = mPageSize*mPageCount;
+        }
+        else
+        {
+            auto file = File(mFilePath, "r+");
+            file.seek(mPageSize*mPageCount-1);
+            file.rawWrite([cast(byte)0]);
+        }
+        
 
-        return result;
+        return mPageCount;
+    }
+
+    static DbFile create(string path, DbParams params)
+    {
+        if( (params.flags && DbFlags.InMemory) == false)
+        {
+            if(!exists(path))
+            {
+                File(path, "w");
+            }
+            else
+            {
+                throw new Exception("DataBase file already exits!");
+            }
+        }
+        return DbFile(path, params);
     }
 
     void dump()
@@ -460,14 +469,14 @@ struct DbFile
     unittest
     {
         import std.file;
+        scope (exit) remove("test.db");
+
         writeln("Unittest [DbFile] start");
+        auto dbFile = DbFile.create("test.db", DbParams(128));
+        dbFile.appendPages(1);
+        dbFile.storePage(PageNo.Master,DbPage(1,128).mRawBytes);
 
-        // TODO change to appropiate fs handing
-        // auto dbFile = DbFile("test.db", 128);
 
-        // ubyte[128] data = 'a'; 
-        // dbFile.appendPages(1);
-        // dbFile.storePage(1,data);
 
         writeln("Unittest [DbFile] passed!");
     }
@@ -481,17 +490,17 @@ struct DbStorage
     DbDataAllocator mDataAllocator;
     DbPageAllocator mPageAllocator;
 
-    this(string path, uint pageSize)
+    this(string path, DbParams params)
     {
-        mDbFile = DbFile(path,pageSize);
+        mDbFile = DbFile(path,params);
         mPageAllocator = DbPageAllocator(&mDbFile);
         mNavigator = DbNavigator(&mDbFile, &mPageAllocator);
         mDataAllocator = DbDataAllocator(&mDbFile, &mPageAllocator);
     }
 
-    this(string path)
+    this(DbFile dbFile)
     {
-        mDbFile = DbFile(path);
+        mDbFile = dbFile;
         mPageAllocator = DbPageAllocator(&mDbFile);
         mNavigator = DbNavigator(&mDbFile, &mPageAllocator);
         mDataAllocator = DbDataAllocator(&mDbFile, &mPageAllocator);
@@ -509,6 +518,12 @@ struct DbStorage
         page.writeTableHeader(DbTableHeader());
         mDbFile.storePage(pageNo, page.mRawBytes);
         return pageNo;
+    }
+
+    static DbStorage* create(string path, DbParams params)
+    {
+        auto dbFile = DbFile.create(path, params);
+        return new DbStorage(dbFile);
     }
 
     uint createTable()
@@ -686,7 +701,7 @@ struct DbStorage
             string name;
         }
 
-        DbStorage storage = DbStorage("",256);
+        DbStorage storage = DbStorage("",DbParams(256, DbFlags.InMemory));
 
         uint masterTablePageNo = storage.initializeStorage();
 
@@ -901,7 +916,7 @@ struct DbDataAllocator
 
         uint pageSize = 512;
         uint testTableTootPage = 1;
-        auto dbFile = new DbFile("",pageSize);
+        auto dbFile = new DbFile("",DbParams(256, DbFlags.InMemory));
         auto pageAlloc = new  DbPageAllocator(dbFile);
         DbDataAllocator allocator = DbDataAllocator(dbFile, pageAlloc);
 

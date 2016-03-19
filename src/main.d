@@ -46,7 +46,7 @@ unittest
         string country;
     }
 
-    DataBase db = DataBase(null,DbParams());
+    DataBase db = DataBase.create("",DbParams(128, DbFlags.InMemory));
     auto collA = db.createCollection!A("SmallIntegers");
     auto collB = db.createCollection!B("Numbers");
     auto collC = db.createCollection!C("Mixed");
@@ -98,7 +98,7 @@ unittest
         int[] b;
     }
 
-    DataBase db = DataBase(null,DbParams());
+    DataBase db = DataBase.create(null,DbParams(128, DbFlags.InMemory));
     auto collectionA = db.createCollection!A("Scores");
 
     [A("James",[1,2,3]), A("Hero 2", [345,-94321,0,6621]), A("R2D2",[13,-987654321])].copy(collectionA);
@@ -125,7 +125,7 @@ unittest
         ubyte c;
     }
     
-    DataBase db = DataBase(null,DbParams(1024));
+    DataBase db = DataBase.create(null,DbParams(1024, DbFlags.InMemory));
     auto collectionA = db.createCollection!A("Many");
     
     for (int i = 0 ; i < 200; ++i)

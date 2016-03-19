@@ -10,11 +10,7 @@ import draft.database.storage;
 
 struct Collection(T)
 {
-    uint mTableRootPage = PageNo.Null;
-    DbStorage * mDbStorage;
-    long mCurrentId = 0;
 
-    
     this(DbStorage *dbStorage, uint tableRootPage)
     {
         mDbStorage = dbStorage;
@@ -89,7 +85,10 @@ struct Collection(T)
         }
     }
 
-    T opIndex(int i) { return mDbStorage.fetchDbItem!T(mTableRootPage, i+1); }
+    T opIndex(int i)
+    {
+        return mDbStorage.fetchDbItem!T(mTableRootPage, i+1);
+    }
 
     void setKey(alias key)()
     {
@@ -101,6 +100,17 @@ struct Collection(T)
          }
          }*/
     }
+
+    // TODO separate collectionId and rootPageId
+    uint collectionId()
+    {
+        return mTableRootPage;
+    }
+
+private:
+    uint mTableRootPage = PageNo.Null;
+    DbStorage * mDbStorage;
+    long mCurrentId = 0;
 
 }
 
