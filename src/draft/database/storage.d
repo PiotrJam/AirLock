@@ -1017,3 +1017,129 @@ struct DbNavigator
         writeln("Unittest [DbNavigator] passed!");
     }
 }
+/**
+ * Function converts ulong for array of nine bytes
+ * In each field of array there is 7 bits for information 
+ * from ulong, One bit is for information if next field of array
+ * keeps data of ulong number
+ * Params:
+ * 	   number =  ulong to convert for array
+ * Returns: Array to save in file
+ */
+byte[9] convertULtoTable(ulong number)
+{
+	size_t i = 0;
+	byte[9] table;
+	while(i < 9 && (number & (0xFFFFFFFFFFFFFFFF << (7 * i))))
+		table[i] = cast(byte)((number >> (7 * i++)) & 0x7F | 0x80);
+	if(i && !(number >> 63))table[i-1] &= 0x7F;
+	return table;
+}
+/**
+ * Function converts array to ulong
+ * 7 bits of every field in array is ulong information
+ * 1 bit is informaton if in next field of array there still more
+ * data for ulong
+ * Params: 
+ * 		table = Array of bytes with information of ulong number
+ * Returns: ulong number
+ */
+ulong convertTableToUL(byte[] table)
+{
+	ulong result = (table.length == 9) ? (cast(ulong)(table[8] & 0x80) << 56):0;
+	for(size_t i=0; i < table.length; ++i)
+		result |= cast(ulong)(table[i] & 0x7F) << (7 * i);
+	return result;
+}
+unittest
+{
+	void checkConvertULtoTable(ulong num, int t0 = 0x0, int t1 = 0x0, int t2 = 0x0, int t3 = 0x0,
+		int t4 = 0x0, int t5 = 0x0, int t6 = 0x0, int t7 = 0x0, int t8 = 0x0)
+	{
+		byte[9] tab = convertULtoTable(num);
+		assert(tab[0] == cast(byte)t0);
+		assert(tab[1] == cast(byte)t1);
+		assert(tab[2] == cast(byte)t2);
+		assert(tab[3] == cast(byte)t3);
+		assert(tab[4] == cast(byte)t4);
+		assert(tab[5] == cast(byte)t5);
+		assert(tab[6] == cast(byte)t6);
+		assert(tab[7] == cast(byte)t7);
+		assert(tab[8] == cast(byte)t8);
+	}
+	writeln("Unittest [convertULtoTable] start");
+	checkConvertULtoTable(0x0);
+	checkConvertULtoTable(0x1,0x1);
+	checkConvertULtoTable(0x7F,0x7F);
+	checkConvertULtoTable(0x80,0x80,0x01);
+	checkConvertULtoTable(0xFF,0xFF,0x01);
+	checkConvertULtoTable(0x3FFF,0xFF,0x7F);
+	checkConvertULtoTable(0x4000,0x80,0x80,0x01);
+	checkConvertULtoTable(0x1FFFFF,0xFF,0xFF,0x7F);
+	checkConvertULtoTable(0x200000,0x80,0x80,0x80,0x01);
+	checkConvertULtoTable(0x0FFFFFFF,0xFF,0xFF,0xFF,0x7F);
+	checkConvertULtoTable(0x10000000,0x80,0x80,0x80,0x80,0x01);
+	checkConvertULtoTable(0x7FFFFFFFF,0xFF,0xFF,0xFF,0xFF,0x7F);
+	checkConvertULtoTable(0x800000000,0x80,0x80,0x80,0x80,0x80,0x01);
+	checkConvertULtoTable(0x3FFFFFFFFFF,0xFF,0xFF,0xFF,0xFF,0xFF,0x7F);
+	checkConvertULtoTable(0x40000000000,0x80,0x80,0x80,0x80,0x80,0x80,0x01);
+	checkConvertULtoTable(0x1FFFFFFFFFFFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0x7F);
+	checkConvertULtoTable(0x2000000000000,0x80,0x80,0x80,0x80,0x80,0x80,0x80,0x01);
+	checkConvertULtoTable(0x0FFFFFFFFFFFFFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0x7F);
+	checkConvertULtoTable(0x100000000000000,0x80,0x80,0x80,0x80,0x80,0x80,0x80,0x80,0x01);
+	checkConvertULtoTable(0x7FFFFFFFFFFFFFFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0x7F);
+	checkConvertULtoTable(0x8000000000000000,0x80,0x80,0x80,0x80,0x80,0x80,0x80,0x80,0x80);
+	checkConvertULtoTable(0xFFFFFFFFFFFFFFFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF);
+	checkConvertULtoTable(0xAFFFFFFFFFFFFFFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xAF);
+	checkConvertULtoTable(0xF1FFFFFFFFFFFF80,0x80,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xF1);
+	writeln("Unittest [convertULtoTable] passed!");
+
+	writeln("Unittest [convertTableToUL] start");
+	assert(cast(ulong)0x0 == convertTableToUL([0x0]));
+	assert(cast(ulong)0x1 == convertTableToUL([0x1]));
+	assert(cast(ulong)0x7F == convertTableToUL([0x7F]));
+	assert(cast(ulong)0x80 == convertTableToUL([cast(byte)0x80,cast(byte)0x01]));
+	assert(cast(ulong)0xFF == convertTableToUL([cast(byte)0xFF,cast(byte)0x01]));
+	assert(cast(ulong)0x3FFF == convertTableToUL([cast(byte)0xFF,cast(byte)0x7F]));
+	assert(cast(ulong)0x4000 == convertTableToUL([cast(byte)0x80,cast(byte)0x80,cast(byte)0x01]));
+	assert(cast(ulong)0x1FFFFF == convertTableToUL([cast(byte)0xFF,cast(byte)0xFF,cast(byte)0x7F]));
+	assert(cast(ulong)0x200000 == convertTableToUL([cast(byte)0x80,cast(byte)0x80,
+				cast(byte)0x80,cast(byte)0x01]));
+	assert(cast(ulong)0x0FFFFFFF == convertTableToUL([cast(byte)0xFF,cast(byte)0xFF,
+				cast(byte)0xFF,cast(byte)0x7F]));
+	assert(cast(ulong)0x10000000 == convertTableToUL([cast(byte)0x80,cast(byte)0x80,
+				cast(byte)0x80,cast(byte)0x80,cast(byte)0x01]));
+	assert(cast(ulong)0x7FFFFFFFF == convertTableToUL([cast(byte)0xFF,cast(byte)0xFF,
+				cast(byte)0xFF,cast(byte)0xFF,cast(byte)0x7F]));
+	assert(cast(ulong)0x800000000 == convertTableToUL([cast(byte)0x80,cast(byte)0x80,cast(byte)0x80,
+				cast(byte)0x80,cast(byte)0x80,cast(byte)0x01]));
+	assert(cast(ulong)0x3FFFFFFFFFF == convertTableToUL([cast(byte)0xFF,cast(byte)0xFF,
+				cast(byte)0xFF,cast(byte)0xFF,cast(byte)0xFF,cast(byte)0x7F]));
+	assert(cast(ulong)0x40000000000 == convertTableToUL([cast(byte)0x80,cast(byte)0x80,
+				cast(byte)0x80,cast(byte)0x80,cast(byte)0x80,cast(byte)0x80,cast(byte)0x01]));
+	assert(cast(ulong)0x1FFFFFFFFFFFF == convertTableToUL([cast(byte)0xFF,cast(byte)0xFF,cast(byte)0xFF,
+				cast(byte)0xFF,cast(byte)0xFF,cast(byte)0xFF,cast(byte)0x7F]));
+	assert(cast(ulong)0x2000000000000 == convertTableToUL([cast(byte)0x80,cast(byte)0x80,cast(byte)0x80,
+				cast(byte)0x80,cast(byte)0x80,cast(byte)0x80,cast(byte)0x80,cast(byte)0x01]));
+	assert(cast(ulong)0x0FFFFFFFFFFFFFF == convertTableToUL([cast(byte)0xFF,cast(byte)0xFF,cast(byte)0xFF,
+				cast(byte)0xFF,cast(byte)0xFF,cast(byte)0xFF,cast(byte)0xFF,cast(byte)0x7F]));
+	assert(cast(ulong)0x100000000000000 == convertTableToUL([cast(byte)0x80,cast(byte)0x80,cast(byte)0x80,
+				cast(byte)0x80,cast(byte)0x80,cast(byte)0x80,cast(byte)0x80,cast(byte)0x80,
+				cast(byte)0x01]));
+	assert(cast(ulong)0x7FFFFFFFFFFFFFFF == convertTableToUL([cast(byte)0xFF,cast(byte)0xFF,cast(byte)0xFF,
+				cast(byte)0xFF,cast(byte)0xFF,cast(byte)0xFF,cast(byte)0xFF,cast(byte)0xFF,
+				cast(byte)0x7F]));
+	assert(cast(ulong)0xFFFFFFFFFFFFFFFF == convertTableToUL([cast(byte)0xFF,cast(byte)0xFF,cast(byte)0xFF,
+				cast(byte)0xFF,cast(byte)0xFF,cast(byte)0xFF,cast(byte)0xFF,cast(byte)0xFF,
+				cast(byte)0xFF]));
+	assert(cast(ulong)0xAFFFFFFFFFFFFFFF == convertTableToUL([cast(byte)0xFF,cast(byte)0xFF,cast(byte)0xFF,
+				cast(byte)0xFF,cast(byte)0xFF,cast(byte)0xFF,cast(byte)0xFF,cast(byte)0xFF,
+				cast(byte)0xAF]));
+	assert(cast(ulong)0xF1FFFFFFFFFFFF80 == convertTableToUL([cast(byte)0x80,cast(byte)0xFF,
+				cast(byte)0xFF,cast(byte)0xFF,cast(byte)0xFF,cast(byte)0xFF,cast(byte)0xFF,
+				cast(byte)0xFF,cast(byte)0xF1]));
+	assert(cast(ulong)0x8000000000000000 == convertTableToUL([cast(byte)0x80,cast(byte)0x80,
+				cast(byte)0x80,cast(byte)0x80,cast(byte)0x80,cast(byte)0x80,cast(byte)0x80,
+				cast(byte)0x80,cast(byte)0x80]));
+	writeln("Unittest [convertTableToUL] passed!");
+}
